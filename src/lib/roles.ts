@@ -9,21 +9,31 @@ export const ROLE_LABELS: Record<AppRole, string> = {
 };
 
 export const ROLE_ROUTES: Record<AppRole, string[]> = {
+  // SUPERADMIN: Has access to EVERYTHING, including the old Staff Accounts (/staff)
   superadmin: [
     "/dashboard","/students","/admissions","/payments","/accounts","/reports",
     "/marks","/attendance","/graduates","/assistant","/staff","/settings",
+    "/communications","/staff-management", "/import-students", "/import-accounts"
   ],
+  
+  // ADMIN: Removed "/staff". They can only see the new Staff Management (/staff-management)
   admin: [
     "/dashboard","/students","/admissions","/payments","/accounts","/reports",
-    "/marks","/attendance","/graduates","/assistant","/staff","/settings",
+    "/marks","/attendance","/graduates","/assistant","/settings",
+    "/communications","/staff-management", "/import-students",
   ],
-  accountant: ["/dashboard","/accounts","/reports","/assistant","/settings"],
   
-  // NO DASHBOARD HERE
+  // ACCOUNTANT: Removed "/staff". They can only see the new Staff Management (/staff-management)
+  accountant: [
+    "/dashboard","/accounts","/reports","/assistant","/settings",
+    "/communications","/staff-management", "/import-accounts"
+  ],
+  
+  // MARKS OFFICER: No dashboard, no staff access
   marks_officer: ["/students", "/marks", "/attendance", "/graduates", "/assistant", "/settings"],
   
-  // NO DASHBOARD HERE
-  receptionist: ["/students", "/admissions", "/payments", "/attendance", "/assistant", "/settings"],
+  // RECEPTIONIST: No dashboard, no staff access
+  receptionist: ["/students", "/admissions", "/payments", "/import-students", "/attendance", "/assistant", "/settings", "/import-students", "/communications"],
 };
 
 export function canAccess(role: AppRole | null, path: string): boolean {
@@ -32,7 +42,6 @@ export function canAccess(role: AppRole | null, path: string): boolean {
   return ROLE_ROUTES[role].includes(path);
 }
 
-// This finds the first allowed page for a role so we don't send them to a forbidden page
 export function getFirstAllowedRoute(role: AppRole | null): string {
   if (!role) return "/auth";
   const routes = ROLE_ROUTES[role];

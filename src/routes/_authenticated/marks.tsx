@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { Trophy, Search, Save, Loader2, GraduationCap } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Trophy, Search, Save, Loader2, GraduationCap, Download, ArrowRightCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,26 +9,31 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import * as XLSX from "xlsx";
 
 export const Route = createFileRoute("/_authenticated/marks")({
   head: () => ({ meta: [{ title: "Marks Entry — Sandstone School" }] }),
   component: MarksPage,
 });
 
-// ── Course definitions ─────────────────────────────────────────────────────
+// ── Course definitions (Synced with PROJECT BERLIN) ────────────────────────
 const COURSES: Record<string, { label: string; levels: string[] }> = {
   english: { label: "English", levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
   computer: { label: "Computer", levels: ["Beginner", "Intermediate", "Advanced"] },
   computer_english: { label: "Computer & English", levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
   french: { label: "French", levels: ["Beginner", "Intermediate", "Advanced"] },
   kiswahili: { label: "Kiswahili", levels: ["Beginner", "Intermediate", "Advanced"] },
+  german: { label: "German", levels: ["Beginner", "Intermediate", "Advanced"] },
   private_class: { label: "Private Class", levels: ["Private"] },
+  private_class_2: { label: "Private Class 2", levels: ["Private"] },
 };
 
 type Student = { id: string; name: string; reg_no: string; course: string; level: string; };
 type MarkRecord = {
   id?: string;
   student_id: string;
+  term?: number;
+  year?: number;
   week_1: number | null; week_2: number | null; week_3: number | null; week_4: number | null;
   week_5: number | null; week_6: number | null; week_7: number | null; week_8: number | null;
   remarks: string;
@@ -44,11 +48,14 @@ function MarksPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // ── Fetch Data ────────────────────────────────────────────────────────────
+  // ── NEW: Term & Year States ───────────────────────────────────────────────
+  const [currentTerm, setCurrentTerm] = useState(1);
+  const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+
+  // ── Fetch Data (Scoped to Current Term & Year) ────────────────────────────
   const fetchData = useCallback(async () => {
     setLoading(true);
     
-    // 1. Fetch students for this specific course and level
     const { data: studs } = await supabase
       .from("students")
       .select("id, name, reg_no, course, level")
@@ -58,14 +65,20 @@ function MarksPage() {
       .order("name");
     setStudents((studs || []) as Student[]);
 
-    // 2. Fetch existing marks for these students
     if (studs && studs.length > 0) {
       const studentIds = studs.map(s => s.id);
-      const { data: marksData } = await supabase
+      const { data: marksData, error } = await supabase
         .from("marks")
         .select("*")
-        .in("student_id", studentIds);
+        .in("student_id", studentIds)
+        .eq("term", currentTerm) // Filter by current term
+        .eq("year", currentYear); // Filter by current year
       
+      if (error) {
+        console.error(error);
+        toast.error("Failed to load marks. Ensure 'term' and 'year' columns exist in Supabase.");
+      }
+
       const map: Record<string, MarkRecord> = {};
       (marksData || []).forEach(m => { map[m.student_id] = m as MarkRecord; });
       setMarksMap(map);
@@ -73,17 +86,15 @@ function MarksPage() {
       setMarksMap({});
     }
     setLoading(false);
-  }, [selectedCourse, selectedLevel]);
+  }, [selectedCourse, selectedLevel, currentTerm, currentYear]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // ── Handle Level Change ───────────────────────────────────────────────────
   const handleCourseChange = (course: string) => {
     setSelectedCourse(course);
     setSelectedLevel(COURSES[course].levels[0]);
   };
 
-  // ── Update Local State ────────────────────────────────────────────────────
   const updateMark = (studentId: string, week: number, value: string) => {
     const numVal = value === "" ? null : Math.min(100, Math.max(0, Number(value)));
     setMarksMap(prev => {
@@ -99,7 +110,7 @@ function MarksPage() {
     });
   };
 
-  // ── Save to Supabase ──────────────────────────────────────────────────────
+  // ── Save to Supabase (Includes Term & Year) ───────────────────────────────
   const saveMarks = async (studentId: string) => {
     setSavingId(studentId);
     const record = marksMap[studentId];
@@ -107,6 +118,8 @@ function MarksPage() {
 
     const payload = {
       student_id: studentId,
+      term: currentTerm,
+      year: currentYear,
       week_1: record.week_1 || 0, week_2: record.week_2 || 0, week_3: record.week_3 || 0, week_4: record.week_4 || 0,
       week_5: record.week_5 || 0, week_6: record.week_6 || 0, week_7: record.week_7 || 0, week_8: record.week_8 || 0,
       remarks: record.remarks || "",
@@ -120,9 +133,55 @@ function MarksPage() {
       toast.error("Failed to save marks: " + error.message);
     } else {
       toast.success("Marks saved successfully");
-      fetchData(); // Refresh to get the new ID
+      fetchData(); 
     }
     setSavingId(null);
+  };
+
+  // ── NEW: End Term Logic ───────────────────────────────────────────────────
+  const handleEndTerm = () => {
+    if (!confirm(`Are you sure you want to mark the end of Term ${currentTerm}, ${currentYear}? The system will advance to the next term.`)) return;
+    
+    if (currentTerm >= 6) {
+      setCurrentTerm(1);
+      setCurrentYear(prev => prev + 1);
+      toast.success(`Academic Year Complete! Advanced to Term 1, ${currentYear + 1}`);
+    } else {
+      setCurrentTerm(prev => prev + 1);
+      toast.success(`Advanced to Term ${currentTerm + 1}, ${currentYear}`);
+    }
+  };
+
+  // ── NEW: Export Backup Logic ──────────────────────────────────────────────
+  const exportTermBackup = () => {
+    if (students.length === 0) return toast.error("No students in this class to export");
+    
+    const data = students.map(s => {
+      const m = marksMap[s.id];
+      return {
+        "Reg No": s.reg_no,
+        "Student Name": s.name,
+        "Course": COURSES[selectedCourse].label,
+        "Level": selectedLevel,
+        "Week 1": m?.week_1 ?? "",
+        "Week 2": m?.week_2 ?? "",
+        "Week 3": m?.week_3 ?? "",
+        "Week 4": m?.week_4 ?? "",
+        "Week 5": m?.week_5 ?? "",
+        "Week 6": m?.week_6 ?? "",
+        "Week 7": m?.week_7 ?? "",
+        "Week 8": m?.week_8 ?? "",
+        "Average": getAvg(m) ?? "",
+        "Grade": getGrade(getAvg(m)),
+        "Remarks": m?.remarks ?? ""
+      };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, `Term ${currentTerm}`);
+    XLSX.writeFile(wb, `Marks_Backup_Term${currentTerm}_${currentYear}.xlsx`);
+    toast.success("Term records backed up to Excel!");
   };
 
   // ── Calculations ──────────────────────────────────────────────────────────
@@ -142,12 +201,10 @@ function MarksPage() {
     return "F";
   };
 
-  // ─ Filtered Students ─────────────────────────────────────────────────────
   const filteredStudents = useMemo(() => {
     return students.filter(s => s.name.toLowerCase().includes(searchQuery.toLowerCase()));
   }, [students, searchQuery]);
 
-  // ── Top Student Logic ─────────────────────────────────────────────────────
   const topStudent = useMemo(() => {
     let best: { name: string; avg: number } | null = null;
     students.forEach(s => {
@@ -166,7 +223,6 @@ function MarksPage() {
         <p className="text-muted-foreground mt-1">8-week assessment — select a class to begin filling marks</p>
       </header>
 
-      {/* Top student */}
       {topStudent && (
         <div className="rounded-2xl border bg-warning/10 border-warning/30 p-6 flex items-center gap-5 transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
           <div className="h-14 w-14 rounded-xl bg-warning/20 flex items-center justify-center">
@@ -180,7 +236,7 @@ function MarksPage() {
         </div>
       )}
 
-      {/* Navigation & Filters */}
+      {/* Navigation, Term Controls & Filters */}
       <div className="rounded-2xl border bg-card p-4 flex flex-wrap items-center gap-4">
         <div className="flex gap-3 flex-1 min-w-[300px]">
           <Select value={selectedCourse} onValueChange={handleCourseChange}>
@@ -201,6 +257,21 @@ function MarksPage() {
           </Select>
         </div>
 
+        {/* Term & Year Controls */}
+        <div className="flex items-center gap-3 bg-muted/50 px-4 py-2 rounded-lg border">
+          <div className="text-center">
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Current Term</p>
+            <p className="text-lg font-bold leading-tight">Term {currentTerm} • {currentYear}</p>
+          </div>
+          <Button 
+            size="sm" 
+            onClick={handleEndTerm} 
+            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+          >
+            <ArrowRightCircle className="h-4 w-4" /> End Term
+          </Button>
+        </div>
+
         <div className="relative flex-1 min-w-[220px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input 
@@ -211,9 +282,14 @@ function MarksPage() {
           />
         </div>
         
-        <Badge variant="outline" className="ml-auto">
-          {filteredStudents.length} student{filteredStudents.length !== 1 ? "s" : ""}
-        </Badge>
+        <div className="flex items-center gap-2 ml-auto">
+          <Badge variant="outline">
+            {filteredStudents.length} student{filteredStudents.length !== 1 ? "s" : ""}
+          </Badge>
+          <Button variant="outline" onClick={exportTermBackup} className="gap-1.5">
+            <Download className="h-4 w-4" /> Backup Term
+          </Button>
+        </div>
       </div>
 
       {/* Table */}

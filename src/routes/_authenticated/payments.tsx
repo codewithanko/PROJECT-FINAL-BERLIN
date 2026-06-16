@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   Plus, Pencil, Trash2, Receipt, AlertCircle, CheckCircle2,
-  Loader2, Search, CreditCard, TrendingUp, Users, Clock,
+  Loader2, Search, CreditCard, TrendingUp, Users, Clock, Banknote,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,14 +32,16 @@ export const Route = createFileRoute("/_authenticated/payments")({
   component: PaymentsPage,
 });
 
-// ── Course definitions ─────────────────────────────────────────────────────
+// ── Course definitions (Synced with Students page) ─────────────────
 const COURSES: Record<string, { label: string; fee: number; levels: string[] }> = {
-  english:          { label: "English",           fee: 150000, levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
-  computer:         { label: "Computer",          fee: 120000, levels: ["Beginner", "Intermediate", "Advanced"] },
-  computer_english: { label: "Computer & English", fee: 200000, levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
+  english:          { label: "English",           fee: 130000, levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
+  computer:         { label: "Computer",          fee: 150000, levels: ["Beginner", "Intermediate", "Advanced"] },
+  computer_english: { label: "Computer & English", fee: 230000, levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
   french:           { label: "French",            fee: 150000, levels: ["Beginner", "Intermediate", "Advanced"] },
-  kiswahili:        { label: "Kiswahili",         fee: 150000, levels: ["Beginner", "Intermediate", "Advanced"] },
-  private_class:    { label: "Private Class",     fee: 250000, levels: ["Private"] },
+  kiswahili:        { label: "Kiswahili",         fee: 300000, levels: ["Beginner", "Intermediate", "Advanced"] },
+  german:           { label: "German",            fee: 300000, levels: ["Beginner", "Intermediate", "Advanced"] },
+  private_class:    { label: "Private Class",     fee: 300000, levels: ["Private"] },
+  private_class_2:  { label: "Private Class 2",   fee: 500000, levels: ["Private"] },
 };
 
 const METHODS = [
@@ -99,19 +101,54 @@ const emptyForm = (): PaymentForm => ({
 function PaymentsPage() {
   const [students, setStudents]     = useState<Student[]>([]);
   const [payments, setPayments]     = useState<Payment[]>([]);
+  const [otherIncome, setOtherIncome] = useState<any[]>([]);
   const [loading, setLoading]       = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  const [tab, setTab]                     = useState<"records" | "overdue">("records");
+  const [tab, setTab]                     = useState<"records" | "overdue" | "other">("records");
   const [courseFilter, setCourseFilter]   = useState("all");
   const [levelFilter, setLevelFilter]     = useState("all");
   const [monthFilter, setMonthFilter]     = useState(currentMonthYear());
   const [search, setSearch]               = useState("");
 
+  // Filter for the Awaiting Payment tab
+  const [overdueCourseFilter, setOverdueCourseFilter] = useState("all");
+
   const [open, setOpen]         = useState(false);
   const [editing, setEditing]   = useState<Payment | null>(null);
   const [deleting, setDeleting] = useState<Payment | null>(null);
   const [form, setForm]         = useState<PaymentForm>(emptyForm());
+
+  // Student Search States
+  const [studentSearch, setStudentSearch] = useState("");
+  const [studentCourseFilter, setStudentCourseFilter] = useState("all");
+  const [studentLevelFilter, setStudentLevelFilter] = useState("all");
+
+  // Other Income States
+  const [otherIncomeOpen, setOtherIncomeOpen] = useState(false);
+  const [otherIncomeForm, setOtherIncomeForm] = useState({
+    source: "", amount: "", method: "cash", date: new Date().toISOString().slice(0, 10), note: ""
+  });
+
+  const fetchOtherIncome = async () => {
+    const { data } = await supabase.from("transactions")
+      .select("*")
+      .like("description", "Other Income:%")
+      .order("date", { ascending: false });
+    if (data) {
+      setOtherIncome(data.map(t => {
+        const parts = t.description.replace("Other Income: ", "").split(" | ");
+        return {
+          id: t.id,
+          source: parts[0] || "Unknown",
+          method: parts[1]?.replace("Method: ", "") || "cash",
+          note: parts[2]?.replace("Note: ", "") || "",
+          amount: Number(t.amount),
+          date: t.date,
+        };
+      }));
+    }
+  };
 
   const fetchAll = async () => {
     setLoading(true);
@@ -121,6 +158,7 @@ function PaymentsPage() {
     ]);
     setStudents((s ?? []) as Student[]);
     setPayments((p ?? []) as Payment[]);
+    await fetchOtherIncome();
     setLoading(false);
   };
 
@@ -135,14 +173,38 @@ function PaymentsPage() {
     return COURSES[courseFilter]?.levels ?? [];
   }, [courseFilter]);
 
+  const dialogFilterLevels = useMemo(() => {
+    if (studentCourseFilter === "all") {
+      const all = new Set<string>();
+      Object.values(COURSES).forEach(c => c.levels.forEach(l => all.add(l)));
+      return Array.from(all);
+    }
+    return COURSES[studentCourseFilter]?.levels ?? [];
+  }, [studentCourseFilter]);
+
   useEffect(() => { setLevelFilter("all"); }, [courseFilter]);
 
+  const dialogFilteredStudents = useMemo(() => {
+    return students.filter(s => {
+      const matchSearch = !studentSearch || 
+        s.name.toLowerCase().includes(studentSearch.toLowerCase()) || 
+        s.reg_no.toLowerCase().includes(studentSearch.toLowerCase());
+      const matchCourse = studentCourseFilter === "all" || s.course === studentCourseFilter;
+      const matchLevel = studentLevelFilter === "all" || s.level === studentLevelFilter;
+      return matchSearch && matchCourse && matchLevel;
+    });
+  }, [students, studentSearch, studentCourseFilter, studentLevelFilter]);
+
+  // UPDATED: Overdue students now strictly checks if their actual database balance is > 0
   const overdueStudents = useMemo(() => {
-    const paidThisMonth = new Set(
-      payments.filter(p => p.month_year === currentMonthYear() && p.status === "paid").map(p => p.student_id)
-    );
-    return students.filter(s => !paidThisMonth.has(s.id));
-  }, [students, payments]);
+    return students.filter(s => {
+      if (s.balance > 0) {
+        if (overdueCourseFilter !== "all" && s.course !== overdueCourseFilter) return false;
+        return true;
+      }
+      return false;
+    });
+  }, [students, overdueCourseFilter]);
 
   const filteredPayments = useMemo(() => {
     return payments.filter(p => {
@@ -156,21 +218,47 @@ function PaymentsPage() {
     });
   }, [payments, monthFilter, courseFilter, levelFilter, search]);
 
+  // UPDATED: Stats now reflect actual total debt owed by students
   const stats = useMemo(() => {
     const thisMonth = payments.filter(p => p.month_year === currentMonthYear());
     return {
       collected:   thisMonth.reduce((s, p) => s + p.amount_paid, 0),
-      outstanding: thisMonth.reduce((s, p) => s + p.balance, 0),
+      outstanding: students.reduce((sum, s) => sum + (s.balance > 0 ? s.balance : 0), 0),
       overdue:     overdueStudents.length,
     };
-  }, [payments, overdueStudents]);
+  }, [payments, students, overdueStudents]);
+
+  const selectStudent = (s: Student) => {
+    // If student has a balance, set that as the amount due. Otherwise, use standard fee.
+    const dueAmount = s.balance > 0 ? s.balance : (COURSES[s.course]?.fee ?? 0);
+    setForm(f => ({ 
+      ...f, 
+      student_id: s.id, 
+      student_name: s.name,
+      reg_no: s.reg_no, 
+      course: s.course, 
+      level: s.level, 
+      amount_due: dueAmount 
+    }));
+    setStudentSearch("");
+  };
 
   const openNew = (student?: Student) => {
     setEditing(null);
+    setStudentSearch("");
+    setStudentCourseFilter("all");
+    setStudentLevelFilter("all");
     if (student) {
-      const fee = COURSES[student.course]?.fee ?? 0;
-      setForm({ ...emptyForm(), student_id: student.id, student_name: student.name,
-        reg_no: student.reg_no, course: student.course, level: student.level, amount_due: fee });
+      const dueAmount = student.balance > 0 ? student.balance : (COURSES[student.course]?.fee ?? 0);
+      setForm({ 
+        ...emptyForm(), 
+        student_id: student.id, 
+        student_name: student.name,
+        reg_no: student.reg_no, 
+        course: student.course, 
+        level: student.level, 
+        amount_due: dueAmount 
+      });
     } else {
       setForm(emptyForm());
     }
@@ -187,14 +275,6 @@ function PaymentsPage() {
       month_year: p.month_year, note: p.note ?? "",
     });
     setOpen(true);
-  };
-
-  const onStudentSelect = (studentId: string) => {
-    const s = students.find(x => x.id === studentId);
-    if (!s) return;
-    const fee = COURSES[s.course]?.fee ?? 0;
-    setForm(f => ({ ...f, student_id: s.id, student_name: s.name,
-      reg_no: s.reg_no, course: s.course, level: s.level, amount_due: fee }));
   };
 
   const save = async () => {
@@ -231,7 +311,7 @@ function PaymentsPage() {
       
       if (error) { toast.error("Failed to record: " + error.message); setSubmitting(false); return; }
 
-      // Update student balance + last_payment_date
+      // CRITICAL: Updates the student's actual balance in the database
       await supabase.from("students").update({
         balance,
         last_payment_date: form.payment_date,
@@ -240,19 +320,47 @@ function PaymentsPage() {
       if (paid > 0) {
         await supabase.from("transactions").insert({
           type: "income", amount: paid, date: form.payment_date,
-          description: `Monthly payment — ${form.student_name} (${form.reg_no}) ${form.level ? `[${form.level}]` : ""} ${formatMonthYear(form.month_year)}`,
+          description: `Payment — ${form.student_name} (${form.reg_no}) ${form.level ? `[${form.level}]` : ""} ${formatMonthYear(form.month_year)}`,
         });
       }
 
       toast.success("Payment recorded", {
         description: balance > 0
-          ? `Balance of ${formatUGX(balance)} outstanding`
-          : "Fully paid for this month",
+          ? `Balance of ${formatUGX(balance)} still outstanding`
+          : "Student is fully cleared! No debt remaining.",
       });
     }
 
     setOpen(false);
     setSubmitting(false);
+    fetchAll();
+  };
+
+  const saveOtherIncome = async () => {
+    if (!otherIncomeForm.source.trim()) return toast.error("Source is required");
+    if (!otherIncomeForm.amount) return toast.error("Amount is required");
+    
+    const desc = `Other Income: ${otherIncomeForm.source} | Method: ${otherIncomeForm.method} | Note: ${otherIncomeForm.note}`;
+    
+    const { error } = await supabase.from("transactions").insert({
+      type: "income",
+      amount: Number(otherIncomeForm.amount),
+      date: otherIncomeForm.date,
+      description: desc
+    });
+    
+    if (error) return toast.error("Failed: " + error.message);
+    toast.success("Other income recorded");
+    setOtherIncomeOpen(false);
+    setOtherIncomeForm({ source: "", amount: "", method: "cash", date: new Date().toISOString().slice(0, 10), note: "" });
+    fetchAll();
+  };
+
+  const deleteOtherIncome = async (id: string) => {
+    if (!confirm("Delete this income record?")) return;
+    const { error } = await supabase.from("transactions").delete().eq("id", id);
+    if (error) return toast.error("Failed: " + error.message);
+    toast.success("Income record deleted");
     fetchAll();
   };
 
@@ -277,36 +385,42 @@ function PaymentsPage() {
     <div className="space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Payments</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Payments & Revenue</h1>
           <p className="text-muted-foreground mt-1">
-            Monthly student fee collection — {formatMonthYear(currentMonthYear())}
+            Manage student fees and other income sources — {formatMonthYear(currentMonthYear())}
           </p>
         </div>
-        <Button onClick={() => openNew()}>
-          <Plus className="h-4 w-4 mr-1" /> Record Payment
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setOtherIncomeOpen(true)}>
+            <Banknote className="h-4 w-4 mr-1" /> Record Other Income
+          </Button>
+          <Button onClick={() => openNew()}>
+            <Plus className="h-4 w-4 mr-1" /> Record Student Payment
+          </Button>
+        </div>
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <StatCard icon={<TrendingUp className="h-5 w-5" />} label="Collected This Month"
           value={formatUGX(stats.collected)} color="text-green-600" />
-        <StatCard icon={<CreditCard className="h-5 w-5" />} label="Outstanding This Month"
+        <StatCard icon={<CreditCard className="h-5 w-5" />} label="Total Debt Owed"
           value={formatUGX(stats.outstanding)}
           color={stats.outstanding > 0 ? "text-destructive" : "text-muted-foreground"} />
-        <StatCard icon={<Users className="h-5 w-5" />} label="Yet to Pay This Month"
+        <StatCard icon={<Users className="h-5 w-5" />} label="Students with Debt"
           value={`${stats.overdue} student${stats.overdue !== 1 ? "s" : ""}`}
           color={stats.overdue > 0 ? "text-amber-600" : "text-muted-foreground"} />
       </div>
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as any)}>
         <TabsList>
-          <TabsTrigger value="records">Payment Records</TabsTrigger>
+          <TabsTrigger value="records">Student Payments</TabsTrigger>
           <TabsTrigger value="overdue" className="gap-2">
-            Awaiting Payment
+            Clear Debts
             {stats.overdue > 0 && (
               <Badge variant="destructive" className="text-xs h-5 px-1.5">{stats.overdue}</Badge>
             )}
           </TabsTrigger>
+          <TabsTrigger value="other">Other Income</TabsTrigger>
         </TabsList>
 
         {/* ── Records Tab ── */}
@@ -355,24 +469,12 @@ function PaymentsPage() {
               <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
                 <Receipt className="h-8 w-8" />
                 <p className="font-medium">No payment records found</p>
-                <p className="text-sm">Adjust filters or record a new payment</p>
               </div>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Student</TableHead>
-                    <TableHead>Reg No</TableHead>
-                    <TableHead>Course</TableHead>
-                    <TableHead>Level</TableHead>
-                    <TableHead>Month</TableHead>
-                    <TableHead>Method</TableHead>
-                    <TableHead className="text-right">Due</TableHead>
-                    <TableHead className="text-right">Paid</TableHead>
-                    <TableHead className="text-right">Balance</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="w-20">Actions</TableHead>
+                    <TableHead>Date</TableHead><TableHead>Student</TableHead><TableHead>Reg No</TableHead><TableHead>Course</TableHead><TableHead>Level</TableHead><TableHead>Month</TableHead><TableHead>Method</TableHead><TableHead className="text-right">Due</TableHead><TableHead className="text-right">Paid</TableHead><TableHead className="text-right">Balance</TableHead><TableHead>Status</TableHead><TableHead className="w-20">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -382,31 +484,17 @@ function PaymentsPage() {
                       <TableCell className="font-medium">{p.student_name}</TableCell>
                       <TableCell className="font-mono text-xs">{p.reg_no}</TableCell>
                       <TableCell>{COURSES[p.course]?.label ?? p.course}</TableCell>
-                      <TableCell>
-                        {p.level ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-medium">
-                            {p.level}
-                          </span>
-                        ) : <span className="text-muted-foreground text-xs">—</span>}
-                      </TableCell>
+                      <TableCell>{p.level ? <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-medium">{p.level}</span> : <span className="text-muted-foreground text-xs">—</span>}</TableCell>
                       <TableCell className="text-sm">{formatMonthYear(p.month_year)}</TableCell>
                       <TableCell className="capitalize">{p.method.replace("_", " ")}</TableCell>
                       <TableCell className="text-right">{formatUGX(p.amount_due)}</TableCell>
                       <TableCell className="text-right text-green-600 font-medium">{formatUGX(p.amount_paid)}</TableCell>
-                      <TableCell className={`text-right font-medium ${p.balance > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-                        {p.balance > 0 ? formatUGX(p.balance) : "—"}
-                      </TableCell>
-                      <TableCell> <StatusBadge status={p.status} /> </TableCell>
+                      <TableCell className={`text-right font-medium ${p.balance > 0 ? "text-destructive" : "text-muted-foreground"}`}>{p.balance > 0 ? formatUGX(p.balance) : "—"}</TableCell>
+                      <TableCell><StatusBadge status={p.status} /></TableCell>
                       <TableCell>
                         <div className="flex gap-1">
-                          <Button size="icon" variant="ghost" onClick={() => openEdit(p)}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button size="icon" variant="ghost"
-                            className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                            onClick={() => setDeleting(p)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <Button size="icon" variant="ghost" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
+                          <Button size="icon" variant="ghost" className="text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => setDeleting(p)}><Trash2 className="h-4 w-4" /></Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -417,26 +505,29 @@ function PaymentsPage() {
           </Card>
         </TabsContent>
 
-        {/* ── Awaiting Tab ── */}
+        {/* ── Clear Debts Tab (Formerly Awaiting Payment) ── */}
         <TabsContent value="overdue" className="mt-4">
           <Card className="p-0 overflow-hidden">
-            <div className="p-4 border-b flex items-center gap-2">
-              <Clock className="h-4 w-4 text-amber-500" />
-              <span className="font-semibold text-sm">
-                Students who have not paid for {formatMonthYear(currentMonthYear())}
-              </span>
-              <Badge variant="outline" className="ml-auto">{overdueStudents.length} students</Badge>
+            <div className="p-4 border-b flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2 flex-1">
+                <Clock className="h-4 w-4 text-amber-500" />
+                <span className="font-semibold text-sm">Students with Outstanding Balances</span>
+                <Badge variant="outline" className="ml-2">{overdueStudents.length} students</Badge>
+              </div>
+              <Select value={overdueCourseFilter} onValueChange={setOverdueCourseFilter}>
+                <SelectTrigger className="w-[180px]"> <SelectValue placeholder="Filter Course" /> </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Courses</SelectItem>
+                  {Object.entries(COURSES).map(([k, v]) => (
+                    <SelectItem key={k} value={k}>{v.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-
             {loading ? (
-              <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground">
-                <Loader2 className="h-5 w-5 animate-spin" /> Loading...
-              </div>
+              <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Loading...</div>
             ) : overdueStudents.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
-                <CheckCircle2 className="h-8 w-8 text-green-500" />
-                <p className="font-medium text-green-600">All students are paid up this month!</p>
-              </div>
+              <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2"><CheckCircle2 className="h-8 w-8 text-green-500" /><p className="font-medium text-green-600">All students are fully paid up! No outstanding debts.</p></div>
             ) : (
               <Table>
                 <TableHeader>
@@ -445,8 +536,7 @@ function PaymentsPage() {
                     <TableHead>Name</TableHead>
                     <TableHead>Course</TableHead>
                     <TableHead>Level</TableHead>
-                    <TableHead className="text-right">Monthly Fee</TableHead>
-                    <TableHead className="text-right">Carried Balance</TableHead>
+                    <TableHead className="text-right">Amount Demanded</TableHead>
                     <TableHead className="text-right">Action</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -456,18 +546,11 @@ function PaymentsPage() {
                       <TableCell className="font-mono text-xs">{s.reg_no}</TableCell>
                       <TableCell className="font-medium">{s.name}</TableCell>
                       <TableCell>{COURSES[s.course]?.label ?? s.course}</TableCell>
-                      <TableCell>
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-medium">
-                          {s.level}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right">{formatUGX(COURSES[s.course]?.fee ?? 0)}</TableCell>
-                      <TableCell className={`text-right font-medium ${s.balance > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-                        {s.balance > 0 ? formatUGX(s.balance) : "—"}
-                      </TableCell>
+                      <TableCell><span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-medium">{s.level}</span></TableCell>
+                      <TableCell className="text-right font-bold text-destructive text-lg">{formatUGX(s.balance)}</TableCell>
                       <TableCell className="text-right">
-                        <Button size="sm" onClick={() => { openNew(s); setTab("records"); }}>
-                          <Plus className="h-3 w-3 mr-1" /> Record Payment
+                        <Button size="sm" onClick={() => { openNew(s); setTab("records"); }} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+                          <Plus className="h-3 w-3 mr-1" /> Clear Debt
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -477,33 +560,123 @@ function PaymentsPage() {
             )}
           </Card>
         </TabsContent>
+
+        {/* ── Other Income Tab ── */}
+        <TabsContent value="other" className="mt-4">
+          <Card className="p-0 overflow-hidden">
+            <div className="p-4 border-b flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Banknote className="h-5 w-5 text-emerald-500" />
+                <span className="font-semibold">Other Income Sources</span>
+              </div>
+              <Badge variant="outline">{otherIncome.length} records</Badge>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Source</TableHead>
+                  <TableHead>Method</TableHead>
+                  <TableHead>Note</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="w-12"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {otherIncome.length === 0 ? (
+                  <TableRow><TableCell colSpan={6} className="text-center py-10 text-muted-foreground">No other income recorded yet. Click "Record Other Income" to add.</TableCell></TableRow>
+                ) : (
+                  otherIncome.map(inc => (
+                    <TableRow key={inc.id}>
+                      <TableCell className="font-mono text-xs">{inc.date}</TableCell>
+                      <TableCell className="font-medium">{inc.source}</TableCell>
+                      <TableCell className="capitalize">{inc.method.replace("_", " ")}</TableCell>
+                      <TableCell className="text-muted-foreground">{inc.note || "—"}</TableCell>
+                      <TableCell className="text-right font-bold text-emerald-600">{formatUGX(inc.amount)}</TableCell>
+                      <TableCell>
+                        <Button size="icon" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => deleteOtherIncome(inc.id)}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </Card>
+        </TabsContent>
       </Tabs>
 
-      {/* ── Payment Dialog ── */}
+      {/* ── Student Payment Dialog ── */}
       <Dialog open={open} onOpenChange={o => !o && setOpen(false)}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editing ? "Edit Payment" : "Record Payment"}</DialogTitle>
+            <DialogTitle>{editing ? "Edit Payment" : "Record Student Payment"}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-4">
             {!editing ? (
               <div className="grid gap-2">
-                <Label>Student <span className="text-destructive">*</span></Label>
-                <Select value={form.student_id} onValueChange={onStudentSelect}>
-                  <SelectTrigger> <SelectValue placeholder="Select a student..." /> </SelectTrigger>
-                  <SelectContent>
-                    {students.map(s => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.name} — {s.reg_no} ({COURSES[s.course]?.label ?? s.course})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label>Search Student <span className="text-destructive">*</span></Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <Select value={studentCourseFilter} onValueChange={setStudentCourseFilter}>
+                    <SelectTrigger><SelectValue placeholder="Filter Course" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Courses</SelectItem>
+                      {Object.entries(COURSES).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Select value={studentLevelFilter} onValueChange={setStudentLevelFilter}>
+                    <SelectTrigger><SelectValue placeholder="Filter Level" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Levels</SelectItem>
+                      {dialogFilterLevels.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input 
+                    className="pl-9"
+                    placeholder="Type name or reg no..." 
+                    value={studentSearch} 
+                    onChange={e => setStudentSearch(e.target.value)}
+                  />
+                </div>
+                {studentSearch && (
+                  <div className="border rounded-md max-h-48 overflow-y-auto bg-card shadow-lg z-50 relative">
+                    {dialogFilteredStudents.length === 0 ? (
+                      <div className="p-3 text-sm text-muted-foreground text-center">No students found</div>
+                    ) : (
+                      dialogFilteredStudents.map(s => (
+                        <button 
+                          key={s.id} 
+                          type="button"
+                          onClick={() => selectStudent(s)} 
+                          className="w-full text-left p-3 hover:bg-accent border-b last:border-0 transition-colors"
+                        >
+                          <div className="font-medium text-sm">{s.name}</div>
+                          <div className="text-xs text-muted-foreground">{s.reg_no} • {COURSES[s.course]?.label} • {s.level}</div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
-              <div className="rounded-lg border bg-muted/40 px-4 py-3 text-sm">
-                <span className="font-medium">{form.student_name}</span>
-                <span className="text-muted-foreground ml-2">({form.reg_no})</span>
+              <div className="flex items-center justify-between rounded-lg border bg-muted/40 px-4 py-3">
+                <div>
+                  <span className="font-medium">{form.student_name}</span>
+                  <span className="text-muted-foreground ml-2">({form.reg_no})</span>
+                </div>
+              </div>
+            )}
+
+            {form.student_id && !editing && (
+              <div className="flex items-center justify-between rounded-lg border bg-primary/5 px-4 py-2 text-sm">
+                <span>Selected: <strong>{form.student_name}</strong></span>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setForm(f => ({ ...f, student_id: "", student_name: "", reg_no: "" }))}>
+                  Change
+                </Button>
               </div>
             )}
 
@@ -561,12 +734,8 @@ function PaymentsPage() {
                   ? "bg-green-50 border-green-200 text-green-800 dark:bg-green-950/30 dark:border-green-800 dark:text-green-300"
                   : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300"
               }`}>
-                {Number(form.amount_paid) >= form.amount_due
-                  ? <CheckCircle2 className="h-4 w-4 shrink-0" />
-                  : <AlertCircle className="h-4 w-4 shrink-0" />}
-                {Number(form.amount_paid) >= form.amount_due
-                  ? "Full payment — no balance will remain"
-                  : `Balance of ${formatUGX(form.amount_due - Number(form.amount_paid))} will remain on account`}
+                {Number(form.amount_paid) >= form.amount_due ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
+                {Number(form.amount_paid) >= form.amount_due ? "Full payment — student debt is cleared!" : `Balance of ${formatUGX(form.amount_due - Number(form.amount_paid))} will remain on account`}
               </div>
             )}
 
@@ -591,7 +760,7 @@ function PaymentsPage() {
               <Label>Note (optional)</Label>
               <Input value={form.note}
                 onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
-                placeholder="e.g. partial payment, school fee waiver..." />
+                placeholder="e.g. clearing admission balance, school fee waiver..." />
             </div>
           </div>
           <DialogFooter>
@@ -600,6 +769,52 @@ function PaymentsPage() {
               {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {editing ? "Save Changes" : "Record Payment"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Other Income Dialog ── */}
+      <Dialog open={otherIncomeOpen} onOpenChange={setOtherIncomeOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Record Other Income</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <Label>Source / Description <span className="text-destructive">*</span></Label>
+              <Input 
+                value={otherIncomeForm.source} 
+                onChange={e => setOtherIncomeForm({...otherIncomeForm, source: e.target.value})} 
+                placeholder="e.g. Donation, Event Income, Sale of Books..." 
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-2">
+                <Label>Amount (UGX) <span className="text-destructive">*</span></Label>
+                <Input type="number" value={otherIncomeForm.amount} onChange={e => setOtherIncomeForm({...otherIncomeForm, amount: e.target.value})} placeholder="0" />
+              </div>
+              <div className="grid gap-2">
+                <Label>Date</Label>
+                <Input type="date" value={otherIncomeForm.date} onChange={e => setOtherIncomeForm({...otherIncomeForm, date: e.target.value})} />
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label>Payment Method</Label>
+              <Select value={otherIncomeForm.method} onValueChange={v => setOtherIncomeForm({...otherIncomeForm, method: v})}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {METHODS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label>Note (optional)</Label>
+              <Input value={otherIncomeForm.note} onChange={e => setOtherIncomeForm({...otherIncomeForm, note: e.target.value})} placeholder="Additional details..." />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOtherIncomeOpen(false)}>Cancel</Button>
+            <Button onClick={saveOtherIncome}>Record Income</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -5,6 +5,10 @@ import {
   CreditCard, TrendingUp, AlertTriangle, BookOpen,
   ArrowUp, ArrowDown, Loader2,
 } from "lucide-react";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+  PieChart, Pie, Cell
+} from "recharts";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { formatUGX } from "@/lib/courses";
@@ -26,7 +30,21 @@ type Stat = {
 function Dashboard() {
   const navigate = useNavigate();
   const [stats, setStats] = useState<Stat[]>([]);
+  const [monthlyRevenue, setMonthlyRevenue] = useState<any[]>([]);
+  const [courseDistribution, setCourseDistribution] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // ── FIXED: Explicit Hex Colors for SVG Charts (Guarantees they render correctly) ──
+  const COLORS = [
+    "#3b82f6", // Blue
+    "#10b981", // Emerald Green
+    "#f59e0b", // Amber
+    "#ef4444", // Red
+    "#8b5cf6", // Violet
+    "#ec4899", // Pink
+    "#06b6d4", // Cyan
+    "#f97316", // Orange
+  ];
 
   // ── Fetch Live Data from Supabase ──────────────────────────────────────────
   useEffect(() => {
@@ -41,6 +59,16 @@ function Dashboard() {
       const feeBalances = students?.reduce((sum, s) => sum + (Number(s.balance) || 0), 0) ?? 0;
       const activeCourses = new Set(students?.filter(s => s.status === "active").map(s => s.course)).size;
 
+      // Calculate Course Distribution for Pie Chart
+      const courseCounts = students?.filter(s => s.status === "active").reduce((acc: Record<string, number>, s) => {
+        const course = s.course || "Unknown";
+        acc[course] = (acc[course] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>) ?? {};
+      
+      const distributionData = Object.entries(courseCounts).map(([name, value]) => ({ name, value }));
+      setCourseDistribution(distributionData);
+
       // 2. Fetch Transactions Data
       const { data: transactions } = await supabase.from("transactions").select("type, amount, date");
       
@@ -51,12 +79,32 @@ function Dashboard() {
       let thisMonthExpenses = 0;
       let lastMonthExpenses = 0;
 
-      // Calculate dates for Month-over-Month trend comparison
       const now = new Date();
       const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
       const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
 
+      // Calculate Monthly Revenue for Bar Chart (Last 6 Months)
+      const revenueData = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+        const monthName = d.toLocaleString('default', { month: 'short' });
+        let income = 0;
+        let expense = 0;
+        
+        transactions?.forEach(t => {
+          const tDate = new Date(t.date);
+          if (tDate.getFullYear() === d.getFullYear() && tDate.getMonth() === d.getMonth()) {
+            const amt = Number(t.amount) || 0;
+            if (t.type === "income") income += amt;
+            else if (t.type === "expense") expense += amt;
+          }
+        });
+        
+        return { name: monthName, Income: income, Expenses: expense };
+      });
+      setMonthlyRevenue(revenueData);
+
+      // Calculate Totals and Trends
       transactions?.forEach(t => {
         const amt = Number(t.amount) || 0;
         const tDate = new Date(t.date);
@@ -74,7 +122,6 @@ function Dashboard() {
 
       const netProfit = totalIncome - totalExpenses;
 
-      // Helper to calculate percentage trend
       const calcTrend = (current: number, previous: number) => {
         if (previous === 0) return { dir: "up" as const, value: current > 0 ? "100%" : "0%", label: "vs last month" };
         const change = ((current - previous) / previous) * 100;
@@ -109,7 +156,6 @@ function Dashboard() {
 
   return (
     <div className="space-y-8">
-      {/* ── FIXED HEADER: Replaced broken logo with clean icon block ── */}
       <header className="flex items-center gap-5">
         <div className="h-16 w-16 shrink-0 rounded-2xl bg-primary/10 flex items-center justify-center text-primary drop-shadow-sm">
           <GraduationCap className="h-8 w-8" />
@@ -137,20 +183,69 @@ function Dashboard() {
         )}
       </div>
 
-      {/* ── Chart Placeholders ── */}
+      {/* ── Live Charts ── */}
       <div className="grid gap-5 lg:grid-cols-2">
+        {/* Revenue Overview Bar Chart */}
         <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-accent">
           <h2 className="font-semibold text-lg">Revenue Overview</h2>
-          <p className="text-sm text-muted-foreground mt-1">Income vs expenses across the term</p>
-          <div className="mt-6 h-48 rounded-lg bg-gradient-to-br from-muted to-accent/40 flex items-center justify-center text-muted-foreground text-sm">
-            Chart placeholder
+          <p className="text-sm text-muted-foreground mt-1">Income vs expenses over the last 6 months</p>
+          <div className="mt-6 h-72">
+            {loading ? (
+              <div className="h-full flex items-center justify-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /></div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={monthlyRevenue}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                  <XAxis dataKey="name" className="text-xs" tick={{ fontSize: 12 }} />
+                  <YAxis className="text-xs" tick={{ fontSize: 12 }} />
+                  <Tooltip 
+                    contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }}
+                    formatter={(value: number) => formatUGX(value)}
+                  />
+                  <Legend />
+                  {/* FIXED: Using explicit Hex codes for SVG bars */}
+                  <Bar dataKey="Income" fill="#10b981" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="Expenses" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
+
+        {/* Course Distribution Pie Chart */}
         <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-accent">
           <h2 className="font-semibold text-lg">Course Distribution</h2>
-          <p className="text-sm text-muted-foreground mt-1">Students by active programme</p>
-          <div className="mt-6 h-48 rounded-lg bg-gradient-to-br from-muted to-accent/40 flex items-center justify-center text-muted-foreground text-sm">
-            Chart placeholder
+          <p className="text-sm text-muted-foreground mt-1">Active students by programme</p>
+          <div className="mt-6 h-72">
+            {loading ? (
+              <div className="h-full flex items-center justify-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /></div>
+            ) : courseDistribution.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-muted-foreground text-sm">No active students to display</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={courseDistribution}
+                    cx="50%"
+                    cy="50%"
+                    labelLine={false}
+                    outerRadius={90}
+                    fill="#8884d8"
+                    dataKey="value"
+                  >
+                    {/* FIXED: Mapping explicit Hex colors to every slice */}
+                    {courseDistribution.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip 
+                    contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }}
+                    formatter={(value: number) => [`${value} students`, "Count"]} 
+                  />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
       </div>

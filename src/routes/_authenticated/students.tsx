@@ -25,7 +25,6 @@ import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 
-// ── UPDATED ROUTE: Added validateSearch to catch the ?search= parameter from the URL ──
 export const Route = createFileRoute("/_authenticated/students")({
   validateSearch: (search) => ({
     search: (search.search as string) || "",
@@ -34,14 +33,16 @@ export const Route = createFileRoute("/_authenticated/students")({
   component: StudentsPage,
 });
 
-// ── Course & Level definitions ────────────────────────────────────────────
-export const COURSES: Record<string, { label: string; levels: string[] }> = {
-  english: { label: "English", levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
-  computer: { label: "Computer", levels: ["Beginner", "Intermediate", "Advanced"] },
-  computer_english: { label: "Computer & English", levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
-  french: { label: "French", levels: ["Beginner", "Intermediate", "Advanced"] },
-  kiswahili: { label: "Kiswahili", levels: ["Beginner", "Intermediate", "Advanced"] },
-  private_class: { label: "Private Class", levels: ["Private"] },
+// ── UPDATED COURSES: Added fees and new courses (German, Private Class 2) ──
+export const COURSES: Record<string, { label: string; fee: number; levels: string[] }> = {
+  english: { label: "English", fee: 130000, levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
+  computer: { label: "Computer", fee: 150000, levels: ["Beginner", "Intermediate", "Advanced"] },
+  computer_english: { label: "Computer & English", fee: 230000, levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
+  french: { label: "French", fee: 150000, levels: ["Beginner", "Intermediate", "Advanced"] },
+  kiswahili: { label: "Kiswahili", fee: 300000, levels: ["Beginner", "Intermediate", "Advanced"] },
+  german: { label: "German", fee: 300000, levels: ["Beginner", "Intermediate", "Advanced"] },
+  private_class: { label: "Private Class", fee: 300000, levels: ["Private"] },
+  private_class_2: { label: "Private Class 2", fee: 500000, levels: ["Private"] },
 };
 export type CourseKey = keyof typeof COURSES;
 
@@ -49,7 +50,6 @@ export function formatUGX(amount: number) {
   return `UGX ${amount.toLocaleString("en-UG")}`;
 }
 
-// ── Types ──────────────────────────────────────────────────────────────────
 type Status = "active" | "promoted" | "graduated";
 type Student = {
   id: string;
@@ -63,82 +63,87 @@ type Student = {
   payment_cycle_days: number;
 };
 
-// ── Helpers ────────────────────────────────────────────────────────────────
 const statusVariant = (s: Status): "secondary" | "default" | "outline" =>
   s === "graduated" ? "secondary" : s === "promoted" ? "default" : "outline";
 
-function getDaysUntilNextPayment(student: Student): number | null {
-  if (!student.last_payment_date) return null;
-  const last = new Date(student.last_payment_date);
-  const nextDue = new Date(last);
-  nextDue.setDate(nextDue.getDate() + (student.payment_cycle_days ?? 30));
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  nextDue.setHours(0, 0, 0, 0);
-  return Math.ceil((nextDue.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-}
-
-function PaymentCountdown({ student }: { student: Student }) {
-  const days = getDaysUntilNextPayment(student);
+// ── NEW: Shows exact next payment date instead of just days left ──
+function NextPaymentInfo({ student }: { student: Student }) {
   if (student.status === "graduated") return <span className="text-muted-foreground text-xs">—</span>;
-  if (days === null) {
+  
+  if (!student.last_payment_date) {
     return (
-      <span className="inline-flex items-center gap-1 text-xs text-amber-600 font-medium">
-        <AlertTriangle className="h-3 w-3" /> No payment recorded
+      <span className="inline-flex items-center gap-1 text-xs text-destructive font-medium">
+        <AlertTriangle className="h-3 w-3" /> Awaiting First Payment
       </span>
     );
   }
+
+  const last = new Date(student.last_payment_date);
+  const cycleDays = student.payment_cycle_days ?? 30;
+  const nextDue = new Date(last);
+  nextDue.setDate(nextDue.getDate() + cycleDays);
+  
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  nextDue.setHours(0, 0, 0, 0);
+  
+  const days = Math.ceil((nextDue.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  const formattedDate = nextDue.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+
   if (days < 0) {
     return (
-      <span className="inline-flex items-center gap-1 text-xs text-destructive font-semibold">
-        <AlertTriangle className="h-3 w-3" /> Overdue by {Math.abs(days)}d
-      </span>
+      <div className="flex flex-col">
+        <span className="inline-flex items-center gap-1 text-xs text-destructive font-semibold">
+          <AlertTriangle className="h-3 w-3" /> Overdue ({Math.abs(days)}d)
+        </span>
+        <span className="text-[10px] text-muted-foreground">Was due {formattedDate}</span>
+      </div>
     );
   }
   if (days === 0) {
     return (
-      <span className="inline-flex items-center gap-1 text-xs text-destructive font-semibold">
-        <AlertTriangle className="h-3 w-3" /> Due today
-      </span>
+      <div className="flex flex-col">
+        <span className="inline-flex items-center gap-1 text-xs text-destructive font-semibold">
+          <AlertTriangle className="h-3 w-3" /> Due Today
+        </span>
+        <span className="text-[10px] text-muted-foreground">{formattedDate}</span>
+      </div>
     );
   }
   if (days <= 5) {
     return (
-      <span className="inline-flex items-center gap-1 text-xs text-amber-600 font-medium">
-        <Clock className="h-3 w-3" /> {days}d left
-      </span>
+      <div className="flex flex-col">
+        <span className="inline-flex items-center gap-1 text-xs text-amber-600 font-medium">
+          <Clock className="h-3 w-3" /> Due in {days}d
+        </span>
+        <span className="text-[10px] text-muted-foreground">Due {formattedDate}</span>
+      </div>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 text-xs text-green-600 font-medium">
-      <CheckCircle2 className="h-3 w-3" /> {days}d left
-    </span>
+    <div className="flex flex-col">
+      <span className="inline-flex items-center gap-1 text-xs text-green-600 font-medium">
+        <CheckCircle2 className="h-3 w-3" /> {days}d left
+      </span>
+      <span className="text-[10px] text-muted-foreground">Due {formattedDate}</span>
+    </div>
   );
 }
 
-// ── Main Page ──────────────────────────────────────────────────────────────
 function StudentsPage() {
   const navigate = useNavigate();
-  
-  // ── UPDATED: Read the search term from the URL (?search=...) ──
   const { search: urlSearch } = Route.useSearch(); 
   
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
-  
-  // ── UPDATED: Initialize the search box with the URL term ──
   const [query, setQuery] = useState(urlSearch); 
-  
   const [courseFilter, setCourseFilter] = useState<string>("all");
   const [levelFilter, setLevelFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [editing, setEditing] = useState<Student | null>(null);
   const [deleting, setDeleting] = useState<Student | null>(null);
 
-  // ── UPDATED: Automatically update the search box if the URL changes ──
-  useEffect(() => {
-    setQuery(urlSearch);
-  }, [urlSearch]);
+  useEffect(() => { setQuery(urlSearch); }, [urlSearch]);
 
   const fetchStudents = async () => {
     setLoading(true);
@@ -168,16 +173,28 @@ function StudentsPage() {
   const overdueStudents = useMemo(() =>
     students.filter(s => {
       if (s.status === "graduated") return false;
-      const days = getDaysUntilNextPayment(s);
-      return days === null || days <= 0;
+      if (!s.last_payment_date) return true; 
+      const last = new Date(s.last_payment_date);
+      const nextDue = new Date(last);
+      nextDue.setDate(nextDue.getDate() + (s.payment_cycle_days ?? 30));
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      nextDue.setHours(0, 0, 0, 0);
+      return nextDue <= today;
     }), [students]
   );
 
   const dueSoonStudents = useMemo(() =>
     students.filter(s => {
-      if (s.status === "graduated") return false;
-      const days = getDaysUntilNextPayment(s);
-      return days !== null && days > 0 && days <= 5;
+      if (s.status === "graduated" || !s.last_payment_date) return false;
+      const last = new Date(s.last_payment_date);
+      const nextDue = new Date(last);
+      nextDue.setDate(nextDue.getDate() + (s.payment_cycle_days ?? 30));
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      nextDue.setHours(0, 0, 0, 0);
+      const days = Math.ceil((nextDue.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      return days > 0 && days <= 5;
     }), [students]
   );
 
@@ -256,16 +273,14 @@ function StudentsPage() {
         </Button>
       </header>
 
+      {/* ── UPDATED: Minimized Overdue Alert (No names list) ── */}
       {overdueStudents.length > 0 && (
         <Card className="border-destructive/50 bg-destructive/5 p-4">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
-            <div className="flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="h-5 w-5 text-destructive shrink-0" />
               <p className="font-semibold text-destructive text-sm">
-                {overdueStudents.length} student{overdueStudents.length !== 1 ? "s" : ""} overdue or with no payment recorded
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {overdueStudents.map(s => s.name).join(", ")}
+                {overdueStudents.length} student{overdueStudents.length !== 1 ? "s" : ""} require immediate payment attention
               </p>
             </div>
             <Button size="sm" variant="destructive" onClick={() => navigate({ to: "/payments" })}>
@@ -277,17 +292,11 @@ function StudentsPage() {
 
       {dueSoonStudents.length > 0 && (
         <Card className="border-amber-400/50 bg-amber-50/50 dark:bg-amber-950/10 p-4">
-          <div className="flex items-start gap-3">
-            <Clock className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-            <div className="flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <Clock className="h-5 w-5 text-amber-600 shrink-0" />
               <p className="font-semibold text-amber-700 dark:text-amber-400 text-sm">
                 {dueSoonStudents.length} student{dueSoonStudents.length !== 1 ? "s" : ""} due within 5 days
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {dueSoonStudents.map(s => {
-                  const d = getDaysUntilNextPayment(s);
-                  return `${s.name} (${d}d)`;
-                }).join(", ")}
               </p>
             </div>
           </div>
@@ -363,16 +372,30 @@ function StudentsPage() {
                 <TableHead>Level</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Balance</TableHead>
-                <TableHead>Next Payment</TableHead>
+                <TableHead>Next Payment Date</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.map(s => {
-                const days = getDaysUntilNextPayment(s);
-                const rowClass = s.status === "graduated" ? "" :
-                  days === null || days <= 0 ? "bg-destructive/5" :
-                  days <= 5 ? "bg-amber-50/50 dark:bg-amber-950/10" : "";
+                let rowClass = "";
+                if (s.status !== "graduated") {
+                  if (!s.last_payment_date) {
+                    rowClass = "bg-destructive/5";
+                  } else {
+                    const last = new Date(s.last_payment_date);
+                    const nextDue = new Date(last);
+                    nextDue.setDate(nextDue.getDate() + (s.payment_cycle_days ?? 30));
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    nextDue.setHours(0, 0, 0, 0);
+                    const days = Math.ceil((nextDue.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    
+                    if (days <= 0) rowClass = "bg-destructive/5";
+                    else if (days <= 5) rowClass = "bg-amber-50/50 dark:bg-amber-950/10";
+                  }
+                }
+                
                 return (
                   <TableRow key={s.id} className={rowClass}>
                     <TableCell className="font-mono text-xs">{s.reg_no}</TableCell>
@@ -389,7 +412,7 @@ function StudentsPage() {
                     <TableCell className={s.balance > 0 ? "text-destructive font-medium" : ""}>
                       {formatUGX(s.balance)}
                     </TableCell>
-                    <TableCell> <PaymentCountdown student={s} /> </TableCell>
+                    <TableCell> <NextPaymentInfo student={s} /> </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
                         <Button size="sm" variant="ghost" onClick={() => promote(s)} disabled={s.status === "graduated"}>

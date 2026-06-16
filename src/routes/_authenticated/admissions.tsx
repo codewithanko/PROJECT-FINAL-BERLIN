@@ -18,22 +18,22 @@ export const Route = createFileRoute("/_authenticated/admissions")({
   component: AdmissionsPage,
 });
 
-// ── Course definitions ─────────────────────────────────────────────────────
+// ── UPDATED Course definitions (Synced with Students & Payments pages) ─────
 const COURSES: Record<string, { label: string; levels: string[]; fee: number }> = {
   english: {
     label: "English",
     levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"],
-    fee: 150000,
+    fee: 130000,
   },
   computer: {
     label: "Computer",
     levels: ["Beginner", "Intermediate", "Advanced"],
-    fee: 120000,
+    fee: 150000,
   },
   computer_english: {
     label: "Computer & English",
     levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"],
-    fee: 200000,
+    fee: 230000,
   },
   french: {
     label: "French",
@@ -43,12 +43,22 @@ const COURSES: Record<string, { label: string; levels: string[]; fee: number }> 
   kiswahili: {
     label: "Kiswahili",
     levels: ["Beginner", "Intermediate", "Advanced"],
-    fee: 150000,
+    fee: 300000,
+  },
+  german: {
+    label: "German",
+    levels: ["Beginner", "Intermediate", "Advanced"],
+    fee: 300000,
   },
   private_class: {
     label: "Private Class",
     levels: ["Private"],
-    fee: 250000,
+    fee: 300000,
+  },
+  private_class_2: {
+    label: "Private Class 2",
+    levels: ["Private"],
+    fee: 500000,
   },
 };
 
@@ -117,6 +127,8 @@ function AdmissionsPage() {
       level,
       status: "active",
       balance: Math.max(0, balance),
+      last_payment_date: paid > 0 ? new Date().toISOString().split("T")[0] : null,
+      payment_cycle_days: 30,
     });
 
     if (error) {
