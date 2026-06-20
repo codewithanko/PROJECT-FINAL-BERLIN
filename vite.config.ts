@@ -23,7 +23,8 @@ export default defineConfig({
         background_color: "#ffffff",
         display: "standalone",
         scope: "/",
-        start_url: "/",
+        // CRITICAL FIX: Changed from "/" to "/login" so the app always opens on the login screen
+        start_url: "/login", 
         icons: [
           {
             src: "android-chrome-512x512.png",
