@@ -3,15 +3,18 @@ import { useEffect, useState } from "react";
 import {
   Users, UserCheck, GraduationCap, DollarSign,
   CreditCard, TrendingUp, AlertTriangle, BookOpen,
-  ArrowUp, ArrowDown, Loader2,
+  ArrowUp, ArrowDown, Loader2, CalendarDays, ChevronRight,
+  Pencil, Trash2
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
-  PieChart, Pie, Cell
+  PieChart, Pie, Cell, AreaChart, Area
 } from "recharts";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { formatUGX } from "@/lib/courses";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — Sandstone School" }] }),
@@ -27,31 +30,35 @@ type Stat = {
   link: string;
 };
 
+type EventItem = {
+  id: string;
+  title: string;
+  description: string | null;
+  event_date: string;
+  is_holiday: boolean;
+  color: string;
+};
+
 function Dashboard() {
   const navigate = useNavigate();
   const [stats, setStats] = useState<Stat[]>([]);
   const [monthlyRevenue, setMonthlyRevenue] = useState<any[]>([]);
   const [courseDistribution, setCourseDistribution] = useState<any[]>([]);
+  const [events, setEvents] = useState<EventItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editingEvent, setEditingEvent] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
 
-  // ── FIXED: Explicit Hex Colors for SVG Charts (Guarantees they render correctly) ──
   const COLORS = [
-    "#3b82f6", // Blue
-    "#10b981", // Emerald Green
-    "#f59e0b", // Amber
-    "#ef4444", // Red
-    "#8b5cf6", // Violet
-    "#ec4899", // Pink
-    "#06b6d4", // Cyan
-    "#f97316", // Orange
+    "#3b82f6", "#10b981", "#f59e0b", "#ef4444",
+    "#8b5cf6", "#ec4899", "#06b6d4", "#f97316",
   ];
 
-  // ── Fetch Live Data from Supabase ──────────────────────────────────────────
   useEffect(() => {
     const fetchDashboardData = async () => {
       setLoading(true);
       
-      // 1. Fetch Students Data
       const { data: students } = await supabase.from("students").select("id, status, course, balance");
       const totalStudents = students?.length ?? 0;
       const activeStudents = students?.filter(s => s.status === "active").length ?? 0;
@@ -59,7 +66,6 @@ function Dashboard() {
       const feeBalances = students?.reduce((sum, s) => sum + (Number(s.balance) || 0), 0) ?? 0;
       const activeCourses = new Set(students?.filter(s => s.status === "active").map(s => s.course)).size;
 
-      // Calculate Course Distribution for Pie Chart
       const courseCounts = students?.filter(s => s.status === "active").reduce((acc: Record<string, number>, s) => {
         const course = s.course || "Unknown";
         acc[course] = (acc[course] || 0) + 1;
@@ -69,7 +75,6 @@ function Dashboard() {
       const distributionData = Object.entries(courseCounts).map(([name, value]) => ({ name, value }));
       setCourseDistribution(distributionData);
 
-      // 2. Fetch Transactions Data
       const { data: transactions } = await supabase.from("transactions").select("type, amount, date");
       
       let totalIncome = 0;
@@ -84,7 +89,6 @@ function Dashboard() {
       const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
 
-      // Calculate Monthly Revenue for Bar Chart (Last 6 Months)
       const revenueData = Array.from({ length: 6 }, (_, i) => {
         const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
         const monthName = d.toLocaleString('default', { month: 'short' });
@@ -104,7 +108,6 @@ function Dashboard() {
       });
       setMonthlyRevenue(revenueData);
 
-      // Calculate Totals and Trends
       transactions?.forEach(t => {
         const amt = Number(t.amount) || 0;
         const tDate = new Date(t.date);
@@ -135,7 +138,15 @@ function Dashboard() {
       const incomeTrend = calcTrend(thisMonthIncome, lastMonthIncome);
       const expenseTrend = calcTrend(thisMonthExpenses, lastMonthExpenses);
 
-      // 3. Map Data to UI Stats
+      const todayStr = now.toISOString().split("T")[0];
+      const { data: eventsData } = await supabase
+        .from("events")
+        .select("*")
+        .gte("event_date", todayStr)
+        .order("event_date", { ascending: true })
+        .limit(3);
+      setEvents(eventsData || []);
+
       const newStats: Stat[] = [
         { title: "Total Students", value: totalStudents.toString(), icon: Users, trend: { dir: "up", value: `${activeStudents}`, label: "active now" }, tint: "bg-info/10 text-info", link: "/students" },
         { title: "Active Students", value: activeStudents.toString(), icon: UserCheck, trend: { dir: "up", value: `${totalStudents > 0 ? ((activeStudents/totalStudents)*100).toFixed(0) : 0}%`, label: "of total" }, tint: "bg-success/10 text-success", link: "/students" },
@@ -154,6 +165,105 @@ function Dashboard() {
     fetchDashboardData();
   }, []);
 
+  const handleEditClick = (event: EventItem) => {
+    setEditingEvent(event.id);
+    setEditTitle(event.title);
+    setEditDescription(event.description || "");
+  };
+
+  const handleSaveEdit = async (eventId: string) => {
+    if (!editTitle.trim()) {
+      toast.error("Event title is required");
+      return;
+    }
+
+    const { error } = await supabase
+      .from("events")
+      .update({
+        title: editTitle.trim(),
+        description: editDescription.trim() || null,
+      })
+      .eq("id", eventId);
+
+    if (error) {
+      toast.error("Failed to update event");
+      return;
+    }
+
+    toast.success("Event updated successfully");
+    setEditingEvent(null);
+    
+    const { data: eventsData } = await supabase
+      .from("events")
+      .select("*")
+      .gte("event_date", new Date().toISOString().split("T")[0])
+      .order("event_date", { ascending: true })
+      .limit(3);
+    setEvents(eventsData || []);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingEvent(null);
+    setEditTitle("");
+    setEditDescription("");
+  };
+
+  const handleDeleteEvent = async (eventId: string) => {
+    if (!confirm("Are you sure you want to delete this event?")) return;
+
+    const { error } = await supabase
+      .from("events")
+      .delete()
+      .eq("id", eventId);
+
+    if (error) {
+      toast.error("Failed to delete event");
+      return;
+    }
+
+    toast.success("Event deleted successfully");
+    
+    const { data: eventsData } = await supabase
+      .from("events")
+      .select("*")
+      .gte("event_date", new Date().toISOString().split("T")[0])
+      .order("event_date", { ascending: true })
+      .limit(3);
+    setEvents(eventsData || []);
+  };
+
+  // Custom Tooltip for Bar Chart
+  const CustomBarTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <div className="bg-card border border-border rounded-lg shadow-lg p-3 space-y-2">
+          <p className="font-semibold text-sm text-foreground">{label}</p>
+          {payload.map((entry: any, index: number) => (
+            <div key={index} className="flex items-center gap-2 text-xs">
+              <div className="h-2 w-2 rounded-full" style={{ backgroundColor: entry.color }} />
+              <span className="text-muted-foreground">{entry.name}:</span>
+              <span className="font-semibold">{formatUGX(entry.value)}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    return null;
+  };
+
+  // Custom Tooltip for Pie Chart
+  const CustomPieTooltip = ({ active, payload }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <div className="bg-card border border-border rounded-lg shadow-lg p-3">
+          <p className="font-semibold text-sm text-foreground">{payload[0].name}</p>
+          <p className="text-xs text-muted-foreground">Students: <span className="font-semibold text-primary">{payload[0].value}</span></p>
+        </div>
+      );
+    }
+    return null;
+  };
+
   return (
     <div className="space-y-8">
       <header className="flex items-center gap-5">
@@ -166,7 +276,7 @@ function Dashboard() {
         </div>
       </header>
 
-      {/* ── Stats Grid ── */}
+      {/* Stats Grid */}
       <div className="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         {loading ? (
           <div className="col-span-full flex items-center justify-center py-10 gap-2 text-muted-foreground">
@@ -183,44 +293,189 @@ function Dashboard() {
         )}
       </div>
 
-      {/* ── Live Charts ── */}
+      {/* Upcoming Events & Reminders Widget */}
+      <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-accent">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-lg flex items-center gap-2">
+            <CalendarDays className="h-5 w-5 text-primary" /> Upcoming Events & Reminders
+          </h3>
+          <button onClick={() => navigate({ to: "/calendar" })} className="text-xs text-primary hover:underline flex items-center gap-1 font-medium">
+            View Full Calendar <ChevronRight className="h-3 w-3" />
+          </button>
+        </div>
+        <div className="space-y-3">
+          {loading ? (
+            <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+          ) : events.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-4 text-center">No upcoming events scheduled.</p>
+          ) : (
+            events.map((ev) => (
+              <div key={ev.id} className="flex items-start gap-3 p-3 rounded-lg bg-background border border-border/50 shadow-sm">
+                <div className={`h-10 w-10 rounded-lg flex flex-col items-center justify-center shrink-0 ${ev.is_holiday ? "bg-red-100 text-red-600 dark:bg-red-900/30" : "bg-blue-100 text-blue-600 dark:bg-blue-900/30"}`}>
+                  <span className="text-[10px] font-bold uppercase leading-none">
+                    {new Date(ev.event_date).toLocaleString('default', { month: 'short' })}
+                  </span>
+                  <span className="text-lg font-bold leading-none mt-0.5">
+                    {new Date(ev.event_date).getDate()}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  {editingEvent === ev.id ? (
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        className="w-full text-sm font-semibold px-2 py-1 border rounded"
+                        placeholder="Event title"
+                        autoFocus
+                      />
+                      <textarea
+                        value={editDescription}
+                        onChange={(e) => setEditDescription(e.target.value)}
+                        className="w-full text-xs px-2 py-1 border rounded"
+                        rows={2}
+                        placeholder="Description (optional)"
+                      />
+                      <div className="flex gap-2">
+                        <Button size="sm" onClick={() => handleSaveEdit(ev.id)} className="h-6 text-xs">
+                          Save
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={handleCancelEdit} className="h-6 text-xs">
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold text-sm truncate">{ev.title}</p>
+                        {ev.is_holiday && <span className="bg-destructive/10 text-destructive text-[10px] px-1.5 py-0.5 rounded-full font-bold">Holiday</span>}
+                      </div>
+                      <p className="text-xs text-muted-foreground truncate mt-0.5">{ev.description || "No description provided."}</p>
+                    </>
+                  )}
+                </div>
+                {editingEvent !== ev.id && (
+                  <div className="flex gap-1">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 text-muted-foreground hover:text-primary"
+                      onClick={() => handleEditClick(ev)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      onClick={() => handleDeleteEvent(ev.id)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* Live Charts */}
       <div className="grid gap-5 lg:grid-cols-2">
-        {/* Revenue Overview Bar Chart */}
+        {/* Revenue Overview Bar Chart - PROFESSIONAL DESIGN */}
         <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-accent">
-          <h2 className="font-semibold text-lg">Revenue Overview</h2>
-          <p className="text-sm text-muted-foreground mt-1">Income vs expenses over the last 6 months</p>
-          <div className="mt-6 h-72">
+          <div className="mb-6">
+            <h2 className="font-bold text-xl flex items-center gap-2">
+              <TrendingUp className="h-5 w-5 text-primary" />
+              Financial Performance
+            </h2>
+            <p className="text-sm text-muted-foreground mt-1">Income vs expenses over the last 6 months</p>
+          </div>
+          <div className="h-80">
             {loading ? (
-              <div className="h-full flex items-center justify-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /></div>
+              <div className="h-full flex items-center justify-center text-muted-foreground">
+                <Loader2 className="h-6 w-6 animate-spin" />
+              </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={monthlyRevenue}>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                  <XAxis dataKey="name" className="text-xs" tick={{ fontSize: 12 }} />
-                  <YAxis className="text-xs" tick={{ fontSize: 12 }} />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }}
-                    formatter={(value: number) => formatUGX(value)}
+                <AreaChart data={monthlyRevenue} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorIncome" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="colorExpenses" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted/50" vertical={false} />
+                  <XAxis 
+                    dataKey="name" 
+                    className="text-xs" 
+                    tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }}
+                    axisLine={false}
+                    tickLine={false}
+                    dy={10}
                   />
-                  <Legend />
-                  {/* FIXED: Using explicit Hex codes for SVG bars */}
-                  <Bar dataKey="Income" fill="#10b981" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="Expenses" fill="#ef4444" radius={[4, 4, 0, 0]} />
-                </BarChart>
+                  <YAxis 
+                    className="text-xs" 
+                    tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(value) => `${(value / 1000000).toFixed(1)}M`}
+                    dx={-10}
+                  />
+                  <Tooltip content={<CustomBarTooltip />} />
+                  <Legend 
+                    wrapperStyle={{ paddingTop: '20px' }}
+                    iconType="round"
+                    iconSize={10}
+                  />
+                  <Area 
+                    type="monotone" 
+                    dataKey="Income" 
+                    stroke="#10b981" 
+                    strokeWidth={3}
+                    fillOpacity={1} 
+                    fill="url(#colorIncome)" 
+                    name="Income"
+                  />
+                  <Area 
+                    type="monotone" 
+                    dataKey="Expenses" 
+                    stroke="#ef4444" 
+                    strokeWidth={3}
+                    fillOpacity={1} 
+                    fill="url(#colorExpenses)" 
+                    name="Expenses"
+                  />
+                </AreaChart>
               </ResponsiveContainer>
             )}
           </div>
         </div>
 
-        {/* Course Distribution Pie Chart */}
+        {/* Course Distribution Pie Chart - PROFESSIONAL DESIGN */}
         <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-accent">
-          <h2 className="font-semibold text-lg">Course Distribution</h2>
-          <p className="text-sm text-muted-foreground mt-1">Active students by programme</p>
-          <div className="mt-6 h-72">
+          <div className="mb-6">
+            <h2 className="font-bold text-xl flex items-center gap-2">
+              <Users className="h-5 w-5 text-primary" />
+              Student Enrollment Distribution
+            </h2>
+            <p className="text-sm text-muted-foreground mt-1">Active students by programme</p>
+          </div>
+          <div className="h-80">
             {loading ? (
-              <div className="h-full flex items-center justify-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /></div>
+              <div className="h-full flex items-center justify-center text-muted-foreground">
+                <Loader2 className="h-6 w-6 animate-spin" />
+              </div>
             ) : courseDistribution.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-muted-foreground text-sm">No active students to display</div>
+              <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
+                No active students to display
+              </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -229,20 +484,30 @@ function Dashboard() {
                     cx="50%"
                     cy="50%"
                     labelLine={false}
-                    outerRadius={90}
+                    outerRadius={110}
+                    innerRadius={60}
                     fill="#8884d8"
                     dataKey="value"
+                    paddingAngle={3}
                   >
-                    {/* FIXED: Mapping explicit Hex colors to every slice */}
                     {courseDistribution.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      <Cell 
+                        key={`cell-${index}`} 
+                        fill={COLORS[index % COLORS.length]}
+                        stroke="hsl(var(--card))"
+                        strokeWidth={2}
+                      />
                     ))}
                   </Pie>
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }}
-                    formatter={(value: number) => [`${value} students`, "Count"]} 
+                  <Tooltip content={<CustomPieTooltip />} />
+                  <Legend 
+                    layout="vertical" 
+                    align="right" 
+                    verticalAlign="middle"
+                    wrapperStyle={{ paddingLeft: '20px' }}
+                    iconType="circle"
+                    iconSize={10}
                   />
-                  <Legend />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -253,7 +518,7 @@ function Dashboard() {
   );
 }
 
-// ── Interactive Stat Card ────────────────────────────────────────────────────
+// Stat Card Component
 function StatCard({ stat, onClick }: { stat: Stat; onClick: () => void }) {
   const Icon = stat.icon;
   const TrendIcon = stat.trend.dir === "up" ? ArrowUp : ArrowDown;

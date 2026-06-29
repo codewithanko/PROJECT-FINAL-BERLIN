@@ -13,27 +13,27 @@ export const ROLE_ROUTES: Record<AppRole, string[]> = {
   superadmin: [
     "/dashboard","/students","/admissions","/payments","/accounts","/reports",
     "/marks","/attendance","/graduates","/assistant","/staff","/settings",
-    "/communications","/staff-management", "/import-students", "/import-accounts"
+    "/communications","/staff-management", "/import-students", "/import-accounts", "/calendar"
   ],
   
   // ADMIN: Removed "/staff". They can only see the new Staff Management (/staff-management)
   admin: [
     "/dashboard","/students","/admissions","/payments","/accounts","/reports",
     "/marks","/attendance","/graduates","/assistant","/settings",
-    "/communications","/staff-management", "/import-students",
+    "/communications","/staff-management", "/import-students", "/calendar"
   ],
   
   // ACCOUNTANT: Removed "/staff". They can only see the new Staff Management (/staff-management)
   accountant: [
     "/dashboard","/accounts","/reports","/assistant","/settings",
-    "/communications","/staff-management", "/import-accounts"
+    "/communications","/staff-management", "/import-accounts", "/calendar"
   ],
   
   // MARKS OFFICER: No dashboard, no staff access
-  marks_officer: ["/students", "/marks", "/attendance", "/graduates", "/assistant", "/settings"],
+  marks_officer: ["/students", "/marks", "/attendance", "/graduates", "/assistant", "/settings", "/calendar"],
   
   // RECEPTIONIST: No dashboard, no staff access
-  receptionist: ["/students", "/admissions", "/payments", "/import-students", "/attendance", "/assistant", "/settings", "/import-students", "/communications"],
+  receptionist: ["/students", "/admissions", "/payments", "/import-students", "/attendance", "/assistant", "/settings", "/communications", "/calendar"],
 };
 
 export function canAccess(role: AppRole | null, path: string): boolean {

@@ -27,6 +27,7 @@ import { Route as AuthenticatedGraduatesRouteImport } from './routes/_authentica
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedCommunicationsRouteImport } from './routes/_authenticated/communications'
 import { Route as AuthenticatedChangePasswordRouteImport } from './routes/_authenticated/change-password'
+import { Route as AuthenticatedCalendarRouteImport } from './routes/_authenticated/calendar'
 import { Route as AuthenticatedAttendanceRouteImport } from './routes/_authenticated/attendance'
 import { Route as AuthenticatedAssistantRouteImport } from './routes/_authenticated/assistant'
 import { Route as AuthenticatedAdmissionsRouteImport } from './routes/_authenticated/admissions'
@@ -126,6 +127,11 @@ const AuthenticatedChangePasswordRoute =
     path: '/change-password',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedCalendarRoute = AuthenticatedCalendarRouteImport.update({
+  id: '/calendar',
+  path: '/calendar',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedAttendanceRoute = AuthenticatedAttendanceRouteImport.update({
   id: '/attendance',
   path: '/attendance',
@@ -155,6 +161,7 @@ export interface FileRoutesByFullPath {
   '/admissions': typeof AuthenticatedAdmissionsRoute
   '/assistant': typeof AuthenticatedAssistantRoute
   '/attendance': typeof AuthenticatedAttendanceRoute
+  '/calendar': typeof AuthenticatedCalendarRoute
   '/change-password': typeof AuthenticatedChangePasswordRoute
   '/communications': typeof AuthenticatedCommunicationsRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
@@ -178,6 +185,7 @@ export interface FileRoutesByTo {
   '/admissions': typeof AuthenticatedAdmissionsRoute
   '/assistant': typeof AuthenticatedAssistantRoute
   '/attendance': typeof AuthenticatedAttendanceRoute
+  '/calendar': typeof AuthenticatedCalendarRoute
   '/change-password': typeof AuthenticatedChangePasswordRoute
   '/communications': typeof AuthenticatedCommunicationsRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
@@ -203,6 +211,7 @@ export interface FileRoutesById {
   '/_authenticated/admissions': typeof AuthenticatedAdmissionsRoute
   '/_authenticated/assistant': typeof AuthenticatedAssistantRoute
   '/_authenticated/attendance': typeof AuthenticatedAttendanceRoute
+  '/_authenticated/calendar': typeof AuthenticatedCalendarRoute
   '/_authenticated/change-password': typeof AuthenticatedChangePasswordRoute
   '/_authenticated/communications': typeof AuthenticatedCommunicationsRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
@@ -228,6 +237,7 @@ export interface FileRouteTypes {
     | '/admissions'
     | '/assistant'
     | '/attendance'
+    | '/calendar'
     | '/change-password'
     | '/communications'
     | '/dashboard'
@@ -251,6 +261,7 @@ export interface FileRouteTypes {
     | '/admissions'
     | '/assistant'
     | '/attendance'
+    | '/calendar'
     | '/change-password'
     | '/communications'
     | '/dashboard'
@@ -275,6 +286,7 @@ export interface FileRouteTypes {
     | '/_authenticated/admissions'
     | '/_authenticated/assistant'
     | '/_authenticated/attendance'
+    | '/_authenticated/calendar'
     | '/_authenticated/change-password'
     | '/_authenticated/communications'
     | '/_authenticated/dashboard'
@@ -427,6 +439,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedChangePasswordRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/calendar': {
+      id: '/_authenticated/calendar'
+      path: '/calendar'
+      fullPath: '/calendar'
+      preLoaderRoute: typeof AuthenticatedCalendarRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/attendance': {
       id: '/_authenticated/attendance'
       path: '/attendance'
@@ -463,6 +482,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedAdmissionsRoute: typeof AuthenticatedAdmissionsRoute
   AuthenticatedAssistantRoute: typeof AuthenticatedAssistantRoute
   AuthenticatedAttendanceRoute: typeof AuthenticatedAttendanceRoute
+  AuthenticatedCalendarRoute: typeof AuthenticatedCalendarRoute
   AuthenticatedChangePasswordRoute: typeof AuthenticatedChangePasswordRoute
   AuthenticatedCommunicationsRoute: typeof AuthenticatedCommunicationsRoute
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
@@ -483,6 +503,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAdmissionsRoute: AuthenticatedAdmissionsRoute,
   AuthenticatedAssistantRoute: AuthenticatedAssistantRoute,
   AuthenticatedAttendanceRoute: AuthenticatedAttendanceRoute,
+  AuthenticatedCalendarRoute: AuthenticatedCalendarRoute,
   AuthenticatedChangePasswordRoute: AuthenticatedChangePasswordRoute,
   AuthenticatedCommunicationsRoute: AuthenticatedCommunicationsRoute,
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,

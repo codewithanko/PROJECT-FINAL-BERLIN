@@ -4,7 +4,7 @@ import {
   LayoutGrid, Users, UserPlus, Wallet, BarChart3, FileText,
   ClipboardEdit, CalendarCheck, GraduationCap, Settings,
   UserCog, LogOut, Bell, Search, Moon, Sun, ChevronLeft, ChevronRight, Sparkles,
-  Loader2, User, MessageSquare, Briefcase, Upload, // Added Upload icon
+  Loader2, User, MessageSquare, Briefcase, Upload, CalendarDays, // Added CalendarDays icon
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,7 @@ const mainItems = [
   { label: "Reports", icon: FileText, to: "/reports" },
   { label: "Marks Assessment", icon: ClipboardEdit, to: "/marks" },
   { label: "Attendance", icon: CalendarCheck, to: "/attendance" },
+  { label: "Calendar", icon: CalendarDays, to: "/calendar" }, // ADDED CALENDAR LINK
   { label: "Graduates", icon: GraduationCap, to: "/graduates" },
   { label: "AI Assistant", icon: Sparkles, to: "/assistant" },
   { label: "Import Students", icon: Upload, to: "/import-students" },
