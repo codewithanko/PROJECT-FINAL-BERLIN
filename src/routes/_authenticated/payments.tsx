@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   Plus, Pencil, Trash2, Receipt, AlertCircle, CheckCircle2,
-  Loader2, Search, CreditCard, TrendingUp, Users, Clock, Banknote,
+  Loader2, Search, CreditCard, TrendingUp, Users, Clock, Banknote, Calendar,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,7 +32,7 @@ export const Route = createFileRoute("/_authenticated/payments")({
   component: PaymentsPage,
 });
 
-// ── Course definitions (Synced with Students page) ─────────────────
+// ── Course definitions ─────────────────────────────────────────────
 const COURSES: Record<string, { label: string; fee: number; levels: string[] }> = {
   english:          { label: "English",           fee: 130000, levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
   computer:         { label: "Computer",          fee: 150000, levels: ["Beginner", "Intermediate", "Advanced"] },
@@ -60,10 +60,27 @@ function currentMonthYear() {
 }
 
 function formatMonthYear(my: string) {
+  if (!my) return "—";
   const [y, m] = my.split("-");
   return new Date(Number(y), Number(m) - 1).toLocaleDateString("en-UG", {
     month: "long", year: "numeric",
   });
+}
+
+function getMonthsArray(startMonth: string, count: number) {
+  const [y, m] = startMonth.split("-").map(Number);
+  const months = [];
+  for (let i = 0; i < count; i++) {
+    const date = new Date(y, m - 1 + i, 1);
+    months.push(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`);
+  }
+  return months;
+}
+
+function getEndMonth(startMonth: string, count: number) {
+  const [y, m] = startMonth.split("-").map(Number);
+  const date = new Date(y, m - 1 + count - 1, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -77,23 +94,29 @@ type Payment = {
   reg_no: string; course: string; level: string;
   amount_due: number; amount_paid: number; balance: number;
   method: string; payment_date: string; month_year: string;
-  status: string; note?: string;
+  status: string; note?: string; months_covered?: number;
 };
 
 type PaymentForm = {
   student_id: string; student_name: string; reg_no: string;
   course: string; level: string;
-  amount_due: number; amount_paid: string;
-  method: string; payment_date: string; month_year: string; note: string;
+  current_balance: number; 
+  amount_due: number;
+  amount_paid: string;
+  method: string; payment_date: string; 
+  start_month: string; 
+  num_months: number;  
+  note: string;
 };
 
 const emptyForm = (): PaymentForm => ({
   student_id: "", student_name: "", reg_no: "",
   course: "english", level: "",
-  amount_due: 0, amount_paid: "",
+  current_balance: 0, amount_due: 0, amount_paid: "",
   method: "cash",
   payment_date: new Date().toISOString().slice(0, 10),
-  month_year: currentMonthYear(),
+  start_month: currentMonthYear(),
+  num_months: 1,
   note: "",
 });
 
@@ -111,7 +134,6 @@ function PaymentsPage() {
   const [monthFilter, setMonthFilter]     = useState(currentMonthYear());
   const [search, setSearch]               = useState("");
 
-  // Filter for the Awaiting Payment tab
   const [overdueCourseFilter, setOverdueCourseFilter] = useState("all");
 
   const [open, setOpen]         = useState(false);
@@ -119,12 +141,10 @@ function PaymentsPage() {
   const [deleting, setDeleting] = useState<Payment | null>(null);
   const [form, setForm]         = useState<PaymentForm>(emptyForm());
 
-  // Student Search States
   const [studentSearch, setStudentSearch] = useState("");
   const [studentCourseFilter, setStudentCourseFilter] = useState("all");
   const [studentLevelFilter, setStudentLevelFilter] = useState("all");
 
-  // Other Income States
   const [otherIncomeOpen, setOtherIncomeOpen] = useState(false);
   const [otherIncomeForm, setOtherIncomeForm] = useState({
     source: "", amount: "", method: "cash", date: new Date().toISOString().slice(0, 10), note: ""
@@ -195,7 +215,6 @@ function PaymentsPage() {
     });
   }, [students, studentSearch, studentCourseFilter, studentLevelFilter]);
 
-  // UPDATED: Overdue students now strictly checks if their actual database balance is > 0
   const overdueStudents = useMemo(() => {
     return students.filter(s => {
       if (s.balance > 0) {
@@ -218,7 +237,6 @@ function PaymentsPage() {
     });
   }, [payments, monthFilter, courseFilter, levelFilter, search]);
 
-  // UPDATED: Stats now reflect actual total debt owed by students
   const stats = useMemo(() => {
     const thisMonth = payments.filter(p => p.month_year === currentMonthYear());
     return {
@@ -228,17 +246,40 @@ function PaymentsPage() {
     };
   }, [payments, students, overdueStudents]);
 
+  // ── FIXED: Smart calculation for Amount Due ──
+  const getNewDue = (f: PaymentForm) => {
+    const courseFee = COURSES[f.course]?.fee ?? 0;
+    
+    if (editing) return courseFee * f.num_months;
+
+    if (f.current_balance > 0 && f.num_months === 1) {
+      return f.current_balance;
+    }
+
+    return f.current_balance + (courseFee * f.num_months);
+  };
+
   const selectStudent = (s: Student) => {
-    // If student has a balance, set that as the amount due. Otherwise, use standard fee.
-    const dueAmount = s.balance > 0 ? s.balance : (COURSES[s.course]?.fee ?? 0);
-    setForm(f => ({ 
-      ...f, 
-      student_id: s.id, 
+    const courseFee = COURSES[s.course]?.fee ?? 0;
+    const currentBalance = s.balance > 0 ? s.balance : 0;
+    
+    let initialDue = courseFee;
+    if (currentBalance > 0) {
+      initialDue = currentBalance;
+    }
+
+    setForm(f => ({
+      ...f,
+      student_id: s.id,
       student_name: s.name,
-      reg_no: s.reg_no, 
-      course: s.course, 
-      level: s.level, 
-      amount_due: dueAmount 
+      reg_no: s.reg_no,
+      course: s.course,
+      level: s.level,
+      current_balance: currentBalance,
+      start_month: currentMonthYear(),
+      num_months: 1,
+      amount_due: initialDue,
+      amount_paid: "",
     }));
     setStudentSearch("");
   };
@@ -249,15 +290,20 @@ function PaymentsPage() {
     setStudentCourseFilter("all");
     setStudentLevelFilter("all");
     if (student) {
-      const dueAmount = student.balance > 0 ? student.balance : (COURSES[student.course]?.fee ?? 0);
-      setForm({ 
-        ...emptyForm(), 
-        student_id: student.id, 
+      const courseFee = COURSES[student.course]?.fee ?? 0;
+      const currentBalance = student.balance > 0 ? student.balance : 0;
+      let initialDue = courseFee;
+      if (currentBalance > 0) initialDue = currentBalance;
+
+      setForm({
+        ...emptyForm(),
+        student_id: student.id,
         student_name: student.name,
-        reg_no: student.reg_no, 
-        course: student.course, 
-        level: student.level, 
-        amount_due: dueAmount 
+        reg_no: student.reg_no,
+        course: student.course,
+        level: student.level,
+        current_balance: currentBalance,
+        amount_due: initialDue,
       });
     } else {
       setForm(emptyForm());
@@ -270,9 +316,13 @@ function PaymentsPage() {
     setForm({
       student_id: p.student_id, student_name: p.student_name, reg_no: p.reg_no,
       course: p.course, level: p.level ?? "",
-      amount_due: p.amount_due, amount_paid: String(p.amount_paid),
+      current_balance: 0, 
+      amount_due: p.amount_due,
+      amount_paid: String(p.amount_paid),
       method: p.method, payment_date: p.payment_date,
-      month_year: p.month_year, note: p.note ?? "",
+      start_month: p.month_year,
+      num_months: p.months_covered || 1,
+      note: p.note ?? "",
     });
     setOpen(true);
   };
@@ -291,11 +341,20 @@ function PaymentsPage() {
 
     setSubmitting(true);
 
+    const [startY, startM] = form.start_month.split("-").map(Number);
+    const paidUntilDate = new Date(startY, startM - 1 + form.num_months, 1);
+    const paidUntilStr = paidUntilDate.toISOString().slice(0, 10);
+
     if (editing) {
+      // If editing, we should technically reverse the old transaction and create a new one, 
+      // but for simplicity we just update the payment record. 
+      // (In a strict accounting app, you'd never edit, only void and recreate).
       const { error } = await supabase.from("payments").update({
         amount_due: due, amount_paid: paid, balance,
         method: form.method, payment_date: form.payment_date,
-        month_year: form.month_year, level: form.level, status, note: form.note,
+        month_year: form.start_month,
+        months_covered: form.num_months,
+        status, note: form.note,
       }).eq("id", editing.id);
       
       if (error) { toast.error("Update failed: " + error.message); setSubmitting(false); return; }
@@ -306,28 +365,43 @@ function PaymentsPage() {
         reg_no: form.reg_no, course: form.course, level: form.level,
         amount_due: due, amount_paid: paid, balance,
         method: form.method, payment_date: form.payment_date,
-        month_year: form.month_year, status, note: form.note,
+        month_year: form.start_month,
+        months_covered: form.num_months,
+        status, note: form.note,
       });
       
       if (error) { toast.error("Failed to record: " + error.message); setSubmitting(false); return; }
 
-      // CRITICAL: Updates the student's actual balance in the database
-      await supabase.from("students").update({
+      // ── FIXED: Only update paid_until if payment covers at least one full month ──
+      const courseFee = COURSES[form.course]?.fee ?? 0;
+      const shouldUpdatePaidUntil = paid >= courseFee;
+
+      const studentUpdate: any = {
         balance,
         last_payment_date: form.payment_date,
-      }).eq("id", form.student_id);
+      };
+
+      if (shouldUpdatePaidUntil) {
+        studentUpdate.paid_until = paidUntilStr;
+      }
+
+      await supabase.from("students").update(studentUpdate).eq("id", form.student_id);
 
       if (paid > 0) {
+        const monthsArr = getMonthsArray(form.start_month, form.num_months);
+        const endMonthStr = formatMonthYear(monthsArr[monthsArr.length - 1]);
+        const startMonthStr = formatMonthYear(monthsArr[0]);
+        
         await supabase.from("transactions").insert({
           type: "income", amount: paid, date: form.payment_date,
-          description: `Payment — ${form.student_name} (${form.reg_no}) ${form.level ? `[${form.level}]` : ""} ${formatMonthYear(form.month_year)}`,
+          description: `Payment — ${form.student_name} (${form.reg_no}) ${form.level ? `[${form.level}]` : ""} ${startMonthStr} to ${endMonthStr} (${form.num_months} month${form.num_months > 1 ? "s" : ""})`,
         });
       }
 
       toast.success("Payment recorded", {
         description: balance > 0
           ? `Balance of ${formatUGX(balance)} still outstanding`
-          : "Student is fully cleared! No debt remaining.",
+          : `Student is fully paid until ${formatMonthYear(getEndMonth(form.start_month, form.num_months))}!`,
       });
     }
 
@@ -364,11 +438,31 @@ function PaymentsPage() {
     fetchAll();
   };
 
+  // ── FIXED: Now deletes the associated transaction from the Accounts ledger! ──
   const confirmDelete = async () => {
     if (!deleting) return;
+    
+    // 1. Delete the associated transaction from the transactions table
+    // We match it by amount, date, and description keywords (student name and reg no)
+    if (deleting.amount_paid > 0) {
+      await supabase
+        .from("transactions")
+        .delete()
+        .eq("type", "income")
+        .eq("amount", deleting.amount_paid)
+        .eq("date", deleting.payment_date)
+        .like("description", `%${deleting.student_name}%`)
+        .like("description", `%${deleting.reg_no}%`);
+    }
+
+    // 2. Delete the payment record from the payments table
     const { error } = await supabase.from("payments").delete().eq("id", deleting.id);
-    if (error) { toast.error("Delete failed: " + error.message); return; }
-    toast.success("Payment record removed");
+    if (error) { 
+      toast.error("Delete failed: " + error.message); 
+      return; 
+    }
+    
+    toast.success("Payment record and transaction removed");
     setDeleting(null);
     fetchAll();
   };
@@ -474,38 +568,52 @@ function PaymentsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Date</TableHead><TableHead>Student</TableHead><TableHead>Reg No</TableHead><TableHead>Course</TableHead><TableHead>Level</TableHead><TableHead>Month</TableHead><TableHead>Method</TableHead><TableHead className="text-right">Due</TableHead><TableHead className="text-right">Paid</TableHead><TableHead className="text-right">Balance</TableHead><TableHead>Status</TableHead><TableHead className="w-20">Actions</TableHead>
+                    <TableHead>Date</TableHead><TableHead>Student</TableHead><TableHead>Reg No</TableHead><TableHead>Course</TableHead><TableHead>Level</TableHead><TableHead>Period</TableHead><TableHead>Method</TableHead><TableHead className="text-right">Due</TableHead><TableHead className="text-right">Paid</TableHead><TableHead className="text-right">Balance</TableHead><TableHead>Status</TableHead><TableHead className="w-20">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredPayments.map(p => (
-                    <TableRow key={p.id}>
-                      <TableCell className="text-sm">{p.payment_date}</TableCell>
-                      <TableCell className="font-medium">{p.student_name}</TableCell>
-                      <TableCell className="font-mono text-xs">{p.reg_no}</TableCell>
-                      <TableCell>{COURSES[p.course]?.label ?? p.course}</TableCell>
-                      <TableCell>{p.level ? <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-medium">{p.level}</span> : <span className="text-muted-foreground text-xs">—</span>}</TableCell>
-                      <TableCell className="text-sm">{formatMonthYear(p.month_year)}</TableCell>
-                      <TableCell className="capitalize">{p.method.replace("_", " ")}</TableCell>
-                      <TableCell className="text-right">{formatUGX(p.amount_due)}</TableCell>
-                      <TableCell className="text-right text-green-600 font-medium">{formatUGX(p.amount_paid)}</TableCell>
-                      <TableCell className={`text-right font-medium ${p.balance > 0 ? "text-destructive" : "text-muted-foreground"}`}>{p.balance > 0 ? formatUGX(p.balance) : "—"}</TableCell>
-                      <TableCell><StatusBadge status={p.status} /></TableCell>
-                      <TableCell>
-                        <div className="flex gap-1">
-                          <Button size="icon" variant="ghost" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
-                          <Button size="icon" variant="ghost" className="text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => setDeleting(p)}><Trash2 className="h-4 w-4" /></Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {filteredPayments.map(p => {
+                    const monthsCovered = p.months_covered || 1;
+                    const endMonth = getEndMonth(p.month_year, monthsCovered);
+                    
+                    return (
+                      <TableRow key={p.id}>
+                        <TableCell className="text-sm">{p.payment_date}</TableCell>
+                        <TableCell className="font-medium">{p.student_name}</TableCell>
+                        <TableCell className="font-mono text-xs">{p.reg_no}</TableCell>
+                        <TableCell>{COURSES[p.course]?.label ?? p.course}</TableCell>
+                        <TableCell>{p.level ? <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-medium">{p.level}</span> : <span className="text-muted-foreground text-xs">—</span>}</TableCell>
+                        <TableCell className="text-sm">
+                          {monthsCovered > 1 ? (
+                            <>
+                              <div>{formatMonthYear(p.month_year)}</div>
+                              <div className="text-xs text-muted-foreground">to {formatMonthYear(endMonth)} ({monthsCovered} mos)</div>
+                            </>
+                          ) : (
+                            formatMonthYear(p.month_year)
+                          )}
+                        </TableCell>
+                        <TableCell className="capitalize">{p.method.replace("_", " ")}</TableCell>
+                        <TableCell className="text-right">{formatUGX(p.amount_due)}</TableCell>
+                        <TableCell className="text-right text-green-600 font-medium">{formatUGX(p.amount_paid)}</TableCell>
+                        <TableCell className={`text-right font-medium ${p.balance > 0 ? "text-destructive" : "text-muted-foreground"}`}>{p.balance > 0 ? formatUGX(p.balance) : "—"}</TableCell>
+                        <TableCell><StatusBadge status={p.status} /></TableCell>
+                        <TableCell>
+                          <div className="flex gap-1">
+                            <Button size="icon" variant="ghost" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
+                            <Button size="icon" variant="ghost" className="text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => setDeleting(p)}><Trash2 className="h-4 w-4" /></Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
           </Card>
         </TabsContent>
 
-        {/* ── Clear Debts Tab (Formerly Awaiting Payment) ── */}
+        {/* ── Clear Debts Tab ── */}
         <TabsContent value="overdue" className="mt-4">
           <Card className="p-0 overflow-hidden">
             <div className="p-4 border-b flex flex-wrap items-center gap-3">
@@ -671,12 +779,59 @@ function PaymentsPage() {
               </div>
             )}
 
-            {form.student_id && !editing && (
-              <div className="flex items-center justify-between rounded-lg border bg-primary/5 px-4 py-2 text-sm">
-                <span>Selected: <strong>{form.student_name}</strong></span>
-                <Button type="button" variant="ghost" size="sm" onClick={() => setForm(f => ({ ...f, student_id: "", student_name: "", reg_no: "" }))}>
-                  Change
-                </Button>
+            {form.student_id && (
+              <div className="rounded-lg border bg-primary/5 p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-sm">Selected: {form.student_name}</span>
+                  {!editing && (
+                    <Button type="button" variant="ghost" size="sm" onClick={() => setForm(f => ({ ...f, student_id: "", student_name: "", reg_no: "", current_balance: 0, amount_due: 0 }))}>
+                      Change
+                    </Button>
+                  )}
+                </div>
+                {form.current_balance > 0 && !editing && (
+                  <div className="text-sm text-destructive font-medium flex items-center gap-1">
+                    <AlertCircle className="h-3 w-3" /> Outstanding Balance: {formatUGX(form.current_balance)}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Multi-Month Selector */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-2">
+                <Label>Start Month</Label>
+                <Input 
+                  type="month" 
+                  value={form.start_month}
+                  onChange={e => setForm(f => ({ ...f, start_month: e.target.value, amount_due: getNewDue({...f, start_month: e.target.value}) }))} 
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Number of Months</Label>
+                <Select value={String(form.num_months)} onValueChange={v => {
+                  const num = parseInt(v);
+                  setForm(f => ({ ...f, num_months: num, amount_due: getNewDue({...f, num_months: num}) }));
+                }}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => (
+                      <SelectItem key={n} value={String(n)}>{n} Month{n > 1 ? "s" : ""}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Visual indicator of months covered */}
+            {form.student_id && form.num_months > 0 && (
+              <div className="flex flex-wrap gap-2 p-3 bg-muted/50 rounded-lg border border-dashed">
+                <span className="text-xs font-semibold text-muted-foreground w-full mb-1 flex items-center gap-1">
+                  <Calendar className="h-3 w-3" /> Covering:
+                </span>
+                {getMonthsArray(form.start_month, form.num_months).map(m => (
+                  <Badge key={m} variant="outline" className="text-xs">{formatMonthYear(m)}</Badge>
+                ))}
               </div>
             )}
 
@@ -685,7 +840,7 @@ function PaymentsPage() {
                 <Label>Course</Label>
                 <Select value={form.course} onValueChange={v => {
                   const levels = COURSES[v]?.levels ?? [];
-                  setForm(f => ({ ...f, course: v, level: levels[0] ?? "", amount_due: COURSES[v]?.fee ?? 0 }));
+                  setForm(f => ({ ...f, course: v, level: levels[0] ?? "", amount_due: getNewDue({...f, course: v}) }));
                 }}>
                   <SelectTrigger> <SelectValue /> </SelectTrigger>
                   <SelectContent>
@@ -706,19 +861,12 @@ function PaymentsPage() {
               </div>
             </div>
 
-            <div className="grid gap-2">
-              <Label>Payment Month</Label>
-              <Input type="month" value={form.month_year}
-                onChange={e => setForm(f => ({ ...f, month_year: e.target.value }))} />
-            </div>
-
             <Separator />
 
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-2">
-                <Label>Amount Due (UGX)</Label>
-                <Input type="number" value={form.amount_due}
-                  onChange={e => setForm(f => ({ ...f, amount_due: Number(e.target.value) }))} />
+                <Label>Total Amount Due (UGX)</Label>
+                <Input type="number" value={form.amount_due} readOnly className="bg-muted font-bold" />
               </div>
               <div className="grid gap-2">
                 <Label>Amount Paid (UGX) <span className="text-destructive">*</span></Label>
@@ -735,7 +883,9 @@ function PaymentsPage() {
                   : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300"
               }`}>
                 {Number(form.amount_paid) >= form.amount_due ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
-                {Number(form.amount_paid) >= form.amount_due ? "Full payment — student debt is cleared!" : `Balance of ${formatUGX(form.amount_due - Number(form.amount_paid))} will remain on account`}
+                {Number(form.amount_paid) >= form.amount_due 
+                  ? `Full payment — student is covered until ${formatMonthYear(getEndMonth(form.start_month, form.num_months))}!` 
+                  : `Balance of ${formatUGX(form.amount_due - Number(form.amount_paid))} will remain on account`}
               </div>
             )}
 
@@ -826,14 +976,14 @@ function PaymentsPage() {
             <AlertDialogDescription>
               This will permanently remove the payment of{" "}
               <strong>{deleting && formatUGX(deleting.amount_paid)}</strong> for{" "}
-              <strong>{deleting?.student_name}</strong>. This cannot be undone.
+              <strong>{deleting?.student_name}</strong> and remove it from the Accounts ledger. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={confirmDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Delete Record
+              Delete Record & Transaction
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

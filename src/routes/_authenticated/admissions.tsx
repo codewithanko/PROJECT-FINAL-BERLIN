@@ -18,48 +18,16 @@ export const Route = createFileRoute("/_authenticated/admissions")({
   component: AdmissionsPage,
 });
 
-// ── UPDATED Course definitions (Synced with Students & Payments pages) ─────
+// ── Course definitions ─────
 const COURSES: Record<string, { label: string; levels: string[]; fee: number }> = {
-  english: {
-    label: "English",
-    levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"],
-    fee: 130000,
-  },
-  computer: {
-    label: "Computer",
-    levels: ["Beginner", "Intermediate", "Advanced"],
-    fee: 150000,
-  },
-  computer_english: {
-    label: "Computer & English",
-    levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"],
-    fee: 230000,
-  },
-  french: {
-    label: "French",
-    levels: ["Beginner", "Intermediate", "Advanced"],
-    fee: 150000,
-  },
-  kiswahili: {
-    label: "Kiswahili",
-    levels: ["Beginner", "Intermediate", "Advanced"],
-    fee: 300000,
-  },
-  german: {
-    label: "German",
-    levels: ["Beginner", "Intermediate", "Advanced"],
-    fee: 300000,
-  },
-  private_class: {
-    label: "Private Class",
-    levels: ["Private"],
-    fee: 300000,
-  },
-  private_class_2: {
-    label: "Private Class 2",
-    levels: ["Private"],
-    fee: 500000,
-  },
+  english: { label: "English", levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"], fee: 130000 },
+  computer: { label: "Computer", levels: ["Beginner", "Intermediate", "Advanced"], fee: 150000 },
+  computer_english: { label: "Computer & English", levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"], fee: 230000 },
+  french: { label: "French", levels: ["Beginner", "Intermediate", "Advanced"], fee: 150000 },
+  kiswahili: { label: "Kiswahili", levels: ["Beginner", "Intermediate", "Advanced"], fee: 300000 },
+  german: { label: "German", levels: ["Beginner", "Intermediate", "Advanced"], fee: 300000 },
+  private_class: { label: "Private Class", levels: ["Private"], fee: 300000 },
+  private_class_2: { label: "Private Class 2", levels: ["Private"], fee: 500000 },
 };
 
 type CourseKey = keyof typeof COURSES;
@@ -69,7 +37,6 @@ function formatUGX(n: number) {
   return `UGX ${n.toLocaleString("en-UG")}`;
 }
 
-// ── Page ───────────────────────────────────────────────────────────────────
 function AdmissionsPage() {
   const navigate = useNavigate();
   const [submitting, setSubmitting] = useState(false);
@@ -83,14 +50,13 @@ function AdmissionsPage() {
   
   // Payment fields
   const [includeRegFee, setIncludeRegFee] = useState(true);
+  const [numMonths, setNumMonths] = useState(1); // NEW: Tracks how many months they are paying for
   const [amountPaid, setAmountPaid] = useState<string>("");
 
   // Auto-generate reg number
   useEffect(() => {
     const generate = async () => {
-      const { count } = await supabase
-        .from("students")
-        .select("*", { count: "exact", head: true });
+      const { count } = await supabase.from("students").select("*", { count: "exact", head: true });
       const next = (count ?? 0) + 1;
       setRegNo(`SSL-${String(next).padStart(4, "0")}`);
     };
@@ -103,7 +69,8 @@ function AdmissionsPage() {
   };
 
   // ── Fee calculations ───────────────────────────────────────────────────
-  const tuitionFee = COURSES[course].fee;
+  const monthlyFee = COURSES[course].fee;
+  const tuitionFee = monthlyFee * numMonths; // UPDATED: Multiply by number of months
   const regFee = includeRegFee ? REGISTRATION_FEE : 0;
   const totalDue = tuitionFee + regFee;
   const paid = Number(amountPaid) || 0;
@@ -120,7 +87,18 @@ function AdmissionsPage() {
 
     setSubmitting(true);
 
-    const { error } = await supabase.from("students").insert({
+    // Calculate the exact date they are paid until
+    let paidUntilStr: string | null = null;
+    if (paid > 0 && numMonths > 0) {
+      const now = new Date();
+      const startY = now.getFullYear();
+      const startM = now.getMonth() + 1; // 1-12
+      const paidUntilDate = new Date(startY, startM - 1 + numMonths, 1);
+      paidUntilStr = paidUntilDate.toISOString().slice(0, 10);
+    }
+
+    // 1. Insert Student
+    const { error: studentError } = await supabase.from("students").insert({
       name: name.trim(),
       reg_no: regNo.trim(),
       course,
@@ -129,27 +107,59 @@ function AdmissionsPage() {
       balance: Math.max(0, balance),
       last_payment_date: paid > 0 ? new Date().toISOString().split("T")[0] : null,
       payment_cycle_days: 30,
+      paid_until: paidUntilStr, // NEW: Save the exact expiration date
     });
 
-    if (error) {
-      toast.error("Admission failed: " + error.message);
+    if (studentError) {
+      toast.error("Admission failed: " + studentError.message);
       setSubmitting(false);
       return;
     }
 
-    // Record payment transaction if any amount was paid
+    // 2. Record payment if any amount was paid
     if (paid > 0) {
-      await supabase.from("transactions").insert({
-        type: "income",
-        amount: paid,
-        date: new Date().toISOString().split("T")[0],
-        description: `Admission payment — ${name.trim()} (${regNo.trim()})${includeRegFee ? " incl. registration fee" : ""}`,
-      });
+      // Fetch the newly created student ID to link the payment record
+      const { data: studentData } = await supabase
+        .from("students")
+        .select("id")
+        .eq("reg_no", regNo.trim())
+        .single();
+
+      if (studentData) {
+        const currentMonthYear = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+        const status = paid >= totalDue ? "paid" : "partial";
+        
+        // Insert into payments table (so it shows up in the Payments page history!)
+        await supabase.from("payments").insert({
+          student_id: studentData.id,
+          student_name: name.trim(),
+          reg_no: regNo.trim(),
+          course,
+          level,
+          amount_due: totalDue,
+          amount_paid: paid,
+          balance: Math.max(0, balance),
+          method: "cash", // Default for admission
+          payment_date: new Date().toISOString().split("T")[0],
+          month_year: currentMonthYear,
+          months_covered: numMonths, // NEW: Save how many months this payment covers
+          status,
+          note: "Admission payment",
+        });
+
+        // Insert into transactions table (for Dashboard/Accounts tracking)
+        await supabase.from("transactions").insert({
+          type: "income",
+          amount: paid,
+          date: new Date().toISOString().split("T")[0],
+          description: `Admission payment — ${name.trim()} (${regNo.trim()}) [${level}] ${numMonths} month(s)${includeRegFee ? " incl. reg fee" : ""}`,
+        });
+      }
     }
 
     toast.success(`${name.trim()} admitted successfully!`, {
       description: isFullyPaid
-        ? "Full payment received. No balance outstanding."
+        ? `Full payment received. Covered for ${numMonths} month(s).`
         : `Balance of ${formatUGX(balance)} recorded on student account.`,
     });
 
@@ -178,27 +188,15 @@ function AdmissionsPage() {
             <div className="grid gap-4 md:grid-cols-2">
               <div className="grid gap-2">
                 <Label>Full Name <span className="text-destructive">*</span></Label>
-                <Input
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  placeholder="e.g. Aisha Nakato"
-                />
+                <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Aisha Nakato" />
               </div>
               <div className="grid gap-2">
                 <Label>Registration No. <span className="text-destructive">*</span></Label>
-                <Input
-                  value={regNo}
-                  onChange={e => setRegNo(e.target.value)}
-                  placeholder="SSL-0001"
-                />
+                <Input value={regNo} onChange={e => setRegNo(e.target.value)} placeholder="SSL-0001" />
               </div>
               <div className="grid gap-2 md:col-span-2">
                 <Label>Phone Number</Label>
-                <Input
-                  value={phone}
-                  onChange={e => setPhone(e.target.value)}
-                  placeholder="+256 700 000 000"
-                />
+                <Input value={phone} onChange={e => setPhone(e.target.value)} placeholder="+256 700 000 000" />
               </div>
               <div className="grid gap-2">
                 <Label>Course <span className="text-destructive">*</span></Label>
@@ -252,6 +250,22 @@ function AdmissionsPage() {
               </div>
             </div>
 
+            {/* NEW: Number of Months Selector */}
+            <div className="grid gap-2">
+              <Label>Number of Months Paid For</Label>
+              <Select value={String(numMonths)} onValueChange={(v) => setNumMonths(parseInt(v))}>
+                <SelectTrigger> <SelectValue /> </SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => (
+                    <SelectItem key={n} value={String(n)}>{n} Month{n > 1 ? "s" : ""}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Select how many months of tuition the student is paying for at admission.
+              </p>
+            </div>
+
             {/* Amount paid */}
             <div className="grid gap-2">
               <Label>Amount Paid Today (UGX)</Label>
@@ -280,7 +294,7 @@ function AdmissionsPage() {
                   : <AlertCircle className="h-4 w-4 shrink-0" />
                 }
                 {isFullyPaid
-                  ? "Full payment received — no balance will be recorded"
+                  ? `Full payment received — student is covered for ${numMonths} month(s)!`
                   : `Outstanding balance of ${formatUGX(balance)} will be recorded on this student's account`
                 }
               </div>
@@ -305,7 +319,8 @@ function AdmissionsPage() {
           </div>
 
           <div className="space-y-3 text-sm">
-            <Row label={`${COURSES[course].label} — first month`} value={formatUGX(tuitionFee)} />
+            {/* UPDATED: Shows the number of months */}
+            <Row label={`${COURSES[course].label} — ${numMonths} month${numMonths > 1 ? "s" : ""}`} value={formatUGX(tuitionFee)} />
             {includeRegFee && (
               <Row label="Registration fee (one-time)" value={formatUGX(REGISTRATION_FEE)} muted />
             )}
@@ -331,7 +346,7 @@ function AdmissionsPage() {
             {paid === 0 || amountPaid === "" ? (
               <Badge variant="outline" className="text-xs">No payment recorded yet</Badge>
             ) : isFullyPaid ? (
-              <Badge className="bg-green-600 text-white text-xs">Fully Paid</Badge>
+              <Badge className="bg-green-600 text-white text-xs">Fully Paid ({numMonths} mo)</Badge>
             ) : (
               <Badge variant="destructive" className="text-xs">
                 Balance: {formatUGX(balance)}
@@ -342,8 +357,7 @@ function AdmissionsPage() {
           <Separator />
 
           <p className="text-xs text-muted-foreground leading-relaxed">
-            The balance recorded here will appear on the student's account in the Students panel
-            and can be updated when future payments are made.
+            The balance and payment duration recorded here will appear on the student's account in the Students panel.
           </p>
         </aside>
       </div>

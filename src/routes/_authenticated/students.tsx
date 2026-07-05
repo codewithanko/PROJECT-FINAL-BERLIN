@@ -33,7 +33,7 @@ export const Route = createFileRoute("/_authenticated/students")({
   component: StudentsPage,
 });
 
-// ── UPDATED COURSES: Added fees and new courses (German, Private Class 2) ──
+// ── COURSES ──
 export const COURSES: Record<string, { label: string; fee: number; levels: string[] }> = {
   english: { label: "English", fee: 130000, levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
   computer: { label: "Computer", fee: 150000, levels: ["Beginner", "Intermediate", "Advanced"] },
@@ -61,16 +61,32 @@ type Student = {
   balance: number;
   last_payment_date: string | null;
   payment_cycle_days: number;
+  paid_until: string | null; // NEW: Tracks when multi-month payments expire
 };
 
 const statusVariant = (s: Status): "secondary" | "default" | "outline" =>
   s === "graduated" ? "secondary" : s === "promoted" ? "default" : "outline";
 
-// ── NEW: Shows exact next payment date instead of just days left ──
+// ── UPDATED: Shows exact next payment date using paid_until if available ──
 function NextPaymentInfo({ student }: { student: Student }) {
   if (student.status === "graduated") return <span className="text-muted-foreground text-xs">—</span>;
   
-  if (!student.last_payment_date) {
+  // Determine the next due date
+  let nextDue: Date | null = null;
+  
+  // Priority 1: Use the exact paid_until date from multi-month payments
+  if (student.paid_until) {
+    nextDue = new Date(student.paid_until);
+  } 
+  // Priority 2: Fallback to old 30-day cycle for students added before this feature
+  else if (student.last_payment_date) {
+    const last = new Date(student.last_payment_date);
+    const cycleDays = student.payment_cycle_days ?? 30;
+    nextDue = new Date(last);
+    nextDue.setDate(nextDue.getDate() + cycleDays);
+  }
+
+  if (!nextDue) {
     return (
       <span className="inline-flex items-center gap-1 text-xs text-destructive font-medium">
         <AlertTriangle className="h-3 w-3" /> Awaiting First Payment
@@ -78,11 +94,6 @@ function NextPaymentInfo({ student }: { student: Student }) {
     );
   }
 
-  const last = new Date(student.last_payment_date);
-  const cycleDays = student.payment_cycle_days ?? 30;
-  const nextDue = new Date(last);
-  nextDue.setDate(nextDue.getDate() + cycleDays);
-  
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   nextDue.setHours(0, 0, 0, 0);
@@ -170,13 +181,22 @@ function StudentsPage() {
 
   useEffect(() => { setLevelFilter("all"); }, [courseFilter]);
 
+  // UPDATED: Overdue logic now respects paid_until
   const overdueStudents = useMemo(() =>
     students.filter(s => {
       if (s.status === "graduated") return false;
-      if (!s.last_payment_date) return true; 
-      const last = new Date(s.last_payment_date);
-      const nextDue = new Date(last);
-      nextDue.setDate(nextDue.getDate() + (s.payment_cycle_days ?? 30));
+      
+      let nextDue: Date | null = null;
+      if (s.paid_until) {
+        nextDue = new Date(s.paid_until);
+      } else if (s.last_payment_date) {
+        const last = new Date(s.last_payment_date);
+        nextDue = new Date(last);
+        nextDue.setDate(nextDue.getDate() + (s.payment_cycle_days ?? 30));
+      } else {
+        return true; // Awaiting first payment
+      }
+      
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       nextDue.setHours(0, 0, 0, 0);
@@ -184,12 +204,22 @@ function StudentsPage() {
     }), [students]
   );
 
+  // UPDATED: Due soon logic now respects paid_until
   const dueSoonStudents = useMemo(() =>
     students.filter(s => {
-      if (s.status === "graduated" || !s.last_payment_date) return false;
-      const last = new Date(s.last_payment_date);
-      const nextDue = new Date(last);
-      nextDue.setDate(nextDue.getDate() + (s.payment_cycle_days ?? 30));
+      if (s.status === "graduated") return false;
+      
+      let nextDue: Date | null = null;
+      if (s.paid_until) {
+        nextDue = new Date(s.paid_until);
+      } else if (s.last_payment_date) {
+        const last = new Date(s.last_payment_date);
+        nextDue = new Date(last);
+        nextDue.setDate(nextDue.getDate() + (s.payment_cycle_days ?? 30));
+      } else {
+        return false; // Awaiting first payment is handled in overdue
+      }
+      
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       nextDue.setHours(0, 0, 0, 0);
@@ -273,7 +303,7 @@ function StudentsPage() {
         </Button>
       </header>
 
-      {/* ── UPDATED: Minimized Overdue Alert (No names list) ── */}
+      {/* ── Overdue Alert ── */}
       {overdueStudents.length > 0 && (
         <Card className="border-destructive/50 bg-destructive/5 p-4">
           <div className="flex items-center justify-between gap-3">
@@ -380,12 +410,18 @@ function StudentsPage() {
               {filtered.map(s => {
                 let rowClass = "";
                 if (s.status !== "graduated") {
-                  if (!s.last_payment_date) {
+                  let nextDue: Date | null = null;
+                  if (s.paid_until) {
+                    nextDue = new Date(s.paid_until);
+                  } else if (s.last_payment_date) {
+                    const last = new Date(s.last_payment_date);
+                    nextDue = new Date(last);
+                    nextDue.setDate(nextDue.getDate() + (s.payment_cycle_days ?? 30));
+                  }
+                  
+                  if (!nextDue) {
                     rowClass = "bg-destructive/5";
                   } else {
-                    const last = new Date(s.last_payment_date);
-                    const nextDue = new Date(last);
-                    nextDue.setDate(nextDue.getDate() + (s.payment_cycle_days ?? 30));
                     const today = new Date();
                     today.setHours(0, 0, 0, 0);
                     nextDue.setHours(0, 0, 0, 0);
