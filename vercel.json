@@ -1,7 +1,8 @@
 {
-  "outputDirectory": "dist/client",
-  "rewrites": [
-    { "source": "/assets/(.*)", "destination": "/assets/$1" },
-    { "source": "/(.*)", "destination": "/api/server" }
-  ]
+  "buildCommand": "vite build",
+  "outputDirectory": "dist",
+  "platform": "vercel",
+  "engines": {
+    "node": "18.x"
+  }
 }
