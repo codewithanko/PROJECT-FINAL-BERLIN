@@ -341,14 +341,13 @@ function PaymentsPage() {
 
     setSubmitting(true);
 
-    const [startY, startM] = form.start_month.split("-").map(Number);
-    const paidUntilDate = new Date(startY, startM - 1 + form.num_months, 1);
+    // ── FIXED: Calculate paid_until as exactly 30 days per month from payment date ──
+    const paymentDate = new Date(form.payment_date);
+    const paidUntilDate = new Date(paymentDate);
+    paidUntilDate.setDate(paymentDate.getDate() + (form.num_months * 30));
     const paidUntilStr = paidUntilDate.toISOString().slice(0, 10);
 
     if (editing) {
-      // If editing, we should technically reverse the old transaction and create a new one, 
-      // but for simplicity we just update the payment record. 
-      // (In a strict accounting app, you'd never edit, only void and recreate).
       const { error } = await supabase.from("payments").update({
         amount_due: due, amount_paid: paid, balance,
         method: form.method, payment_date: form.payment_date,
@@ -401,7 +400,7 @@ function PaymentsPage() {
       toast.success("Payment recorded", {
         description: balance > 0
           ? `Balance of ${formatUGX(balance)} still outstanding`
-          : `Student is fully paid until ${formatMonthYear(getEndMonth(form.start_month, form.num_months))}!`,
+          : `Student is fully paid until ${paidUntilDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}!`,
       });
     }
 
@@ -443,7 +442,6 @@ function PaymentsPage() {
     if (!deleting) return;
     
     // 1. Delete the associated transaction from the transactions table
-    // We match it by amount, date, and description keywords (student name and reg no)
     if (deleting.amount_paid > 0) {
       await supabase
         .from("transactions")
@@ -884,7 +882,7 @@ function PaymentsPage() {
               }`}>
                 {Number(form.amount_paid) >= form.amount_due ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
                 {Number(form.amount_paid) >= form.amount_due 
-                  ? `Full payment — student is covered until ${formatMonthYear(getEndMonth(form.start_month, form.num_months))}!` 
+                  ? `Full payment — student is covered for ${form.num_months * 30} days!` 
                   : `Balance of ${formatUGX(form.amount_due - Number(form.amount_paid))} will remain on account`}
               </div>
             )}

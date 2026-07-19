@@ -50,7 +50,7 @@ function AdmissionsPage() {
   
   // Payment fields
   const [includeRegFee, setIncludeRegFee] = useState(true);
-  const [numMonths, setNumMonths] = useState(1); // NEW: Tracks how many months they are paying for
+  const [numMonths, setNumMonths] = useState(1);
   const [amountPaid, setAmountPaid] = useState<string>("");
 
   // Auto-generate reg number
@@ -70,7 +70,7 @@ function AdmissionsPage() {
 
   // ── Fee calculations ───────────────────────────────────────────────────
   const monthlyFee = COURSES[course].fee;
-  const tuitionFee = monthlyFee * numMonths; // UPDATED: Multiply by number of months
+  const tuitionFee = monthlyFee * numMonths;
   const regFee = includeRegFee ? REGISTRATION_FEE : 0;
   const totalDue = tuitionFee + regFee;
   const paid = Number(amountPaid) || 0;
@@ -87,13 +87,12 @@ function AdmissionsPage() {
 
     setSubmitting(true);
 
-    // Calculate the exact date they are paid until
+    // ── FIXED: Calculate paid_until as exactly 30 days per month from today ──
     let paidUntilStr: string | null = null;
     if (paid > 0 && numMonths > 0) {
       const now = new Date();
-      const startY = now.getFullYear();
-      const startM = now.getMonth() + 1; // 1-12
-      const paidUntilDate = new Date(startY, startM - 1 + numMonths, 1);
+      const paidUntilDate = new Date(now);
+      paidUntilDate.setDate(now.getDate() + (numMonths * 30));
       paidUntilStr = paidUntilDate.toISOString().slice(0, 10);
     }
 
@@ -107,7 +106,7 @@ function AdmissionsPage() {
       balance: Math.max(0, balance),
       last_payment_date: paid > 0 ? new Date().toISOString().split("T")[0] : null,
       payment_cycle_days: 30,
-      paid_until: paidUntilStr, // NEW: Save the exact expiration date
+      paid_until: paidUntilStr,
     });
 
     if (studentError) {
@@ -118,7 +117,6 @@ function AdmissionsPage() {
 
     // 2. Record payment if any amount was paid
     if (paid > 0) {
-      // Fetch the newly created student ID to link the payment record
       const { data: studentData } = await supabase
         .from("students")
         .select("id")
@@ -129,7 +127,6 @@ function AdmissionsPage() {
         const currentMonthYear = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
         const status = paid >= totalDue ? "paid" : "partial";
         
-        // Insert into payments table (so it shows up in the Payments page history!)
         await supabase.from("payments").insert({
           student_id: studentData.id,
           student_name: name.trim(),
@@ -139,15 +136,14 @@ function AdmissionsPage() {
           amount_due: totalDue,
           amount_paid: paid,
           balance: Math.max(0, balance),
-          method: "cash", // Default for admission
+          method: "cash",
           payment_date: new Date().toISOString().split("T")[0],
           month_year: currentMonthYear,
-          months_covered: numMonths, // NEW: Save how many months this payment covers
+          months_covered: numMonths,
           status,
           note: "Admission payment",
         });
 
-        // Insert into transactions table (for Dashboard/Accounts tracking)
         await supabase.from("transactions").insert({
           type: "income",
           amount: paid,
@@ -159,7 +155,7 @@ function AdmissionsPage() {
 
     toast.success(`${name.trim()} admitted successfully!`, {
       description: isFullyPaid
-        ? `Full payment received. Covered for ${numMonths} month(s).`
+        ? `Full payment received. Covered for ${numMonths * 30} days.`
         : `Balance of ${formatUGX(balance)} recorded on student account.`,
     });
 
@@ -250,7 +246,7 @@ function AdmissionsPage() {
               </div>
             </div>
 
-            {/* NEW: Number of Months Selector */}
+            {/* Number of Months Selector */}
             <div className="grid gap-2">
               <Label>Number of Months Paid For</Label>
               <Select value={String(numMonths)} onValueChange={(v) => setNumMonths(parseInt(v))}>
@@ -294,7 +290,7 @@ function AdmissionsPage() {
                   : <AlertCircle className="h-4 w-4 shrink-0" />
                 }
                 {isFullyPaid
-                  ? `Full payment received — student is covered for ${numMonths} month(s)!`
+                  ? `Full payment received — student is covered for ${numMonths * 30} days!`
                   : `Outstanding balance of ${formatUGX(balance)} will be recorded on this student's account`
                 }
               </div>
@@ -319,7 +315,6 @@ function AdmissionsPage() {
           </div>
 
           <div className="space-y-3 text-sm">
-            {/* UPDATED: Shows the number of months */}
             <Row label={`${COURSES[course].label} — ${numMonths} month${numMonths > 1 ? "s" : ""}`} value={formatUGX(tuitionFee)} />
             {includeRegFee && (
               <Row label="Registration fee (one-time)" value={formatUGX(REGISTRATION_FEE)} muted />

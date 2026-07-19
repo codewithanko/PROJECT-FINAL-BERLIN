@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { 
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, NotebookPen, 
-  Download, Loader2, CalendarDays, Target
+  Download, Loader2, CalendarDays, Target, Pencil
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +26,7 @@ export const Route = createFileRoute("/_authenticated/accounts")({
   component: AccountsPage,
 });
 
-// ─── Types (Updated: type is now a fully editable string) ───────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 type Transaction = { id: string; type: string; amount: number; date: string; description?: string | null; };
 type Plan = { id: string; day: string; task: string; done: boolean };
 
@@ -78,6 +78,10 @@ function AccountsPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
+  // Year and Month Filters
+  const [selectedYear, setSelectedYear] = useState("all");
+  const [selectedSpecificMonth, setSelectedSpecificMonth] = useState("all");
+
   const fetchTransactions = useCallback(async () => {
     setLoading(true);
     const { data } = await supabase.from("transactions").select("*").order("date", { ascending: false });
@@ -99,9 +103,27 @@ function AccountsPage() {
 
   useEffect(() => { fetchTransactions(); fetchBudgets(); }, [fetchTransactions, fetchBudgets]);
 
-  // ─── Derived Data (Updated to parse custom types) ──────────────────────────
+  // Available years and months
+  const availableYears = useMemo(() => {
+    const years = new Set<string>();
+    transactions.forEach(t => {
+      const d = new Date(t.date);
+      years.add(String(d.getFullYear()));
+    });
+    return Array.from(years).sort().reverse();
+  }, [transactions]);
+
+  const availableMonths = useMemo(() => {
+    const months = new Set<string>();
+    transactions.forEach(t => {
+      const d = new Date(t.date);
+      months.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    });
+    return Array.from(months).sort().reverse();
+  }, [transactions]);
+
+  // Derived Data
   const categories = useMemo(() => {
-    // Now uses the custom 'type' column (e.g., Tuition, Salary, Donation)
     const cats = new Set(transactions.map(t => t.type || "Uncategorized").filter(Boolean));
     return Array.from(cats).sort();
   }, [transactions]);
@@ -114,6 +136,12 @@ function AccountsPage() {
 
     return transactions.filter(t => {
       const d = new Date(t.date);
+      const tYear = String(d.getFullYear());
+      const tMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+      if (selectedYear !== "all" && tYear !== selectedYear) return false;
+      if (selectedSpecificMonth !== "all" && tMonth !== selectedSpecificMonth) return false;
+
       if (dateRange === "week" && d < weekStart) return false;
       if (dateRange === "month" && d < monthStart) return false;
       if (dateRange === "year" && d < yearStart) return false;
@@ -123,12 +151,10 @@ function AccountsPage() {
         if (dateTo && d > new Date(dateTo)) return false;
       }
 
-      // Direction filter (Parsed from description)
       const isIn = t.description?.includes("Money In");
       if (filterType === "income" && !isIn) return false;
       if (filterType === "expense" && isIn) return false;
 
-      // Category filter (Now uses the custom 'type' column)
       if (filterCategory !== "all" && t.type !== filterCategory) return false;
       
       const searchLower = searchQuery.toLowerCase();
@@ -136,7 +162,7 @@ function AccountsPage() {
         t.type.toLowerCase().includes(searchLower) || 
         (t.description && t.description.toLowerCase().includes(searchLower));
     });
-  }, [transactions, filterType, filterCategory, searchQuery, dateRange, dateFrom, dateTo]);
+  }, [transactions, filterType, filterCategory, searchQuery, dateRange, dateFrom, dateTo, selectedYear, selectedSpecificMonth]);
 
   const totals = useMemo(() => {
     let income = 0, expense = 0;
@@ -196,6 +222,17 @@ function AccountsPage() {
     return true;
   };
 
+  const updateTransaction = async (id: string, data: Partial<Transaction>) => {
+    const { error } = await supabase.from("transactions").update(data).eq("id", id);
+    if (error) { 
+      toast.error("Failed to update: " + error.message); 
+      return false; 
+    }
+    toast.success("Transaction updated");
+    fetchTransactions();
+    return true;
+  };
+
   const removeTransaction = async (id: string) => {
     if (!confirm("Delete this transaction?")) return;
     const { error } = await supabase.from("transactions").delete().eq("id", id);
@@ -224,6 +261,50 @@ function AccountsPage() {
     toast.success("Ledger exported successfully");
   };
 
+  const exportFilteredCSV = () => {
+    const headers = ["Date", "Source/Type", "Direction", "Amount (UGX)", "Note"];
+    const rows = filteredTransactions.map(t => {
+      const descParts = t.description?.split("|").map(s => s.trim()) || [];
+      const direction = descParts[0] || "—";
+      const note = descParts.slice(1).join("|").trim() || "";
+      const isIn = direction.includes("In");
+      return [
+        t.date, 
+        t.type, 
+        direction, 
+        isIn ? `+${t.amount}` : `-${t.amount}`,
+        note
+      ];
+    });
+    
+    const csvContent = [
+      headers.join(","), 
+      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+    
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    
+    let filename = "transactions";
+    if (selectedSpecificMonth !== "all") {
+      const [year, month] = selectedSpecificMonth.split('-');
+      const monthName = new Date(Number(year), Number(month) - 1).toLocaleDateString('en-UG', { month: 'long', year: 'numeric' });
+      filename = `transactions_${monthName.replace(' ', '_')}`;
+    } else if (selectedYear !== "all") {
+      filename = `transactions_${selectedYear}`;
+    } else if (dateFrom && dateTo) {
+      filename = `transactions_${dateFrom}_to_${dateTo}`;
+    }
+    
+    link.href = url;
+    link.setAttribute("download", `${filename}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success(`Exported ${filteredTransactions.length} transactions`);
+  };
+
   const addPlan = (day: string, task: string) => { if (!task.trim()) return; setPlans((p) => [...p, { id: crypto.randomUUID(), day, task: task.trim(), done: false }]); };
   const togglePlan = (id: string) => setPlans((p) => p.map((x) => (x.id === id ? { ...x, done: !x.done } : x)));
   const removePlan = (id: string) => setPlans((p) => p.filter((x) => x.id !== id));
@@ -242,7 +323,7 @@ function AccountsPage() {
         <StatCard label="Total Income (All Time)" value={globalTotals.income} icon={TrendingUp} tone="emerald" />
         <StatCard label="Total Expenses (All Time)" value={globalTotals.expense} icon={TrendingDown} tone="rose" />
         <StatCard label="Net Profit (All Time)" value={globalTotals.net} icon={Wallet} tone={globalTotals.net >= 0 ? "indigo" : "amber"} isNet />
-        <StatCard label={`Filtered Net (${dateRange})`} value={totals.net} icon={CalendarDays} tone={totals.net >= 0 ? "emerald" : "rose"} isNet />
+        <StatCard label={`Filtered Net (${selectedSpecificMonth !== "all" ? selectedSpecificMonth : dateRange})`} value={totals.net} icon={CalendarDays} tone={totals.net >= 0 ? "emerald" : "rose"} isNet />
       </div>
 
       <Tabs defaultValue="ledger" className="space-y-4">
@@ -252,11 +333,11 @@ function AccountsPage() {
           <TabsTrigger value="planner">Weekly Planner</TabsTrigger>
         </TabsList>
 
-        {/* ── LEDGER TAB ── */}
+        {/* ─ LEDGER TAB ── */}
         <TabsContent value="ledger" className="space-y-4">
           <Card className="p-4">
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-              <div className="md:col-span-1">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              <div>
                 <Label className="text-xs">Period</Label>
                 <Select value={dateRange} onValueChange={(v: any) => setDateRange(v)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -282,6 +363,32 @@ function AccountsPage() {
                   </div>
                 </>
               )}
+
+              <div>
+                <Label className="text-xs font-semibold text-primary">Filter by Year</Label>
+                <Select value={selectedYear} onValueChange={setSelectedYear}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Years</SelectItem>
+                    {availableYears.map(y => <SelectItem key={y} value={y}>{y}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label className="text-xs font-semibold text-primary">Filter by Month</Label>
+                <Select value={selectedSpecificMonth} onValueChange={setSelectedSpecificMonth}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Months</SelectItem>
+                    {availableMonths.map(m => {
+                      const [y, mo] = m.split('-');
+                      const label = new Date(Number(y), Number(mo) - 1).toLocaleDateString('en-UG', { month: 'long', year: 'numeric' });
+                      return <SelectItem key={m} value={m}>{label}</SelectItem>;
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
 
               <div>
                 <Label className="text-xs">Direction</Label>
@@ -313,7 +420,66 @@ function AccountsPage() {
 
           <TransactionForm onAdd={addTransaction} categories={categories} />
 
+          {/* ── TABLE WITH DATE FILTER AND INLINE EDITING ─ */}
           <Card className="p-0 overflow-hidden">
+            <div className="p-4 border-b bg-muted/30 flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-4 w-4 text-primary" />
+                <Label className="text-sm font-semibold">Filter by Date Range:</Label>
+              </div>
+              <Input 
+                type="date" 
+                value={dateFrom} 
+                onChange={e => setDateFrom(e.target.value)} 
+                className="w-auto max-w-[150px]"
+                placeholder="From"
+              />
+              <span className="text-muted-foreground">to</span>
+              <Input 
+                type="date" 
+                value={dateTo} 
+                onChange={e => setDateTo(e.target.value)} 
+                className="w-auto max-w-[150px]"
+                placeholder="To"
+              />
+              <Button 
+                variant="default"
+                size="sm"
+                onClick={() => {
+                  setDateRange("custom");
+                }}
+                className="bg-primary text-primary-foreground"
+              >
+                Apply Filter
+              </Button>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => {
+                  setDateFrom("");
+                  setDateTo("");
+                  setDateRange("all");
+                  setSelectedYear("all");
+                  setSelectedSpecificMonth("all");
+                }}
+              >
+                Clear All
+              </Button>
+              <Badge variant="secondary" className="ml-auto">
+                {filteredTransactions.length} transaction{filteredTransactions.length !== 1 ? 's' : ''}
+              </Badge>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => {
+                  exportFilteredCSV();
+                }}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export Filtered
+              </Button>
+            </div>
+
             <Table>
               <TableHeader>
                 <TableRow>
@@ -322,14 +488,14 @@ function AccountsPage() {
                   <TableHead>Direction</TableHead>
                   <TableHead>Note</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="w-12 text-right">Actions</TableHead>
+                  <TableHead className="text-right w-[120px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
                   <TableRow><TableCell colSpan={6} className="text-center py-10"><Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" /></TableCell></TableRow>
                 ) : filteredTransactions.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-10">No transactions found.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-10">No transactions found for this filter.</TableCell></TableRow>
                 ) : (
                   filteredTransactions.map((t) => {
                     const descParts = t.description?.split("|").map(s => s.trim()) || [];
@@ -338,22 +504,15 @@ function AccountsPage() {
                     const isIn = direction.includes("In");
                     
                     return (
-                      <TableRow key={t.id}>
-                        <TableCell className="font-mono text-xs">{t.date}</TableCell>
-                        <TableCell className="font-medium">{t.type}</TableCell>
-                        <TableCell>
-                          <Badge variant={isIn ? "default" : "destructive"} className="text-xs">
-                            {direction}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground max-w-[200px] truncate" title={note}>{note}</TableCell>
-                        <TableCell className={`text-right font-bold tabular-nums ${isIn ? "text-emerald-600" : "text-rose-600"}`}>
-                          {isIn ? "+" : "-"}{formatUGX(Number(t.amount))}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button size="icon" variant="ghost" onClick={() => removeTransaction(t.id)} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-4 w-4" /></Button>
-                        </TableCell>
-                      </TableRow>
+                      <TransactionRow 
+                        key={t.id} 
+                        transaction={t} 
+                        direction={direction}
+                        note={note}
+                        isIn={isIn}
+                        onUpdate={updateTransaction}
+                        onDelete={removeTransaction}
+                      />
                     );
                   })
                 )}
@@ -437,6 +596,165 @@ function AccountsPage() {
   );
 }
 
+// ── Transaction Row with Inline Editing ──
+function TransactionRow({ 
+  transaction, 
+  direction, 
+  note, 
+  isIn, 
+  onUpdate, 
+  onDelete 
+}: { 
+  transaction: Transaction; 
+  direction: string;
+  note: string;
+  isIn: boolean;
+  onUpdate: (id: string, data: Partial<Transaction>) => Promise<boolean>;
+  onDelete: (id: string) => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editDate, setEditDate] = useState(transaction.date);
+  const [editType, setEditType] = useState(transaction.type);
+  const [editAmount, setEditAmount] = useState(String(transaction.amount));
+  const [editDirection, setEditDirection] = useState(isIn ? "Money In" : "Money Out");
+  const [editNote, setEditNote] = useState(note);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    const newDescription = `${editDirection}${editNote.trim() ? ` | ${editNote.trim()}` : ""}`;
+    const success = await onUpdate(transaction.id, {
+      date: editDate,
+      type: editType,
+      amount: Number(editAmount),
+      description: newDescription,
+    });
+    setSaving(false);
+    if (success) setIsEditing(false);
+  };
+
+  const handleCancel = () => {
+    setEditDate(transaction.date);
+    setEditType(transaction.type);
+    setEditAmount(String(transaction.amount));
+    setEditDirection(isIn ? "Money In" : "Money Out");
+    setEditNote(note);
+    setIsEditing(false);
+  };
+
+  if (isEditing) {
+    return (
+      <TableRow className="bg-muted/50">
+        <TableCell>
+          <Input 
+            type="date" 
+            value={editDate} 
+            onChange={(e) => setEditDate(e.target.value)}
+            className="w-[130px]"
+          />
+        </TableCell>
+        <TableCell>
+          <Input 
+            value={editType} 
+            onChange={(e) => setEditType(e.target.value)}
+            className="w-[150px]"
+            placeholder="Source..."
+          />
+        </TableCell>
+        <TableCell>
+          <Select value={editDirection} onValueChange={setEditDirection}>
+            <SelectTrigger className="w-[120px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="Money In">Money In</SelectItem>
+              <SelectItem value="Money Out">Money Out</SelectItem>
+            </SelectContent>
+          </Select>
+        </TableCell>
+        <TableCell>
+          <Input 
+            value={editNote} 
+            onChange={(e) => setEditNote(e.target.value)}
+            className="w-[200px]"
+            placeholder="Note..."
+          />
+        </TableCell>
+        <TableCell>
+          <Input 
+            type="number"
+            value={editAmount} 
+            onChange={(e) => setEditAmount(e.target.value)}
+            className="w-[120px] text-right"
+            placeholder="0"
+          />
+        </TableCell>
+        <TableCell className="text-right">
+          <div className="flex justify-end gap-1">
+            <Button 
+              size="sm" 
+              variant="outline"
+              onClick={handleCancel}
+              disabled={saving}
+              className="h-7 px-2 text-xs"
+            >
+              Cancel
+            </Button>
+            <Button 
+              size="sm"
+              onClick={handleSave}
+              disabled={saving}
+              className="h-7 px-2 text-xs"
+            >
+              {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+            </Button>
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  }
+
+  return (
+    <TableRow className="group hover:bg-muted/30">
+      <TableCell className="font-mono text-xs">{transaction.date}</TableCell>
+      <TableCell className="font-medium">{transaction.type}</TableCell>
+      <TableCell>
+        <Badge variant={isIn ? "default" : "destructive"} className="text-xs">
+          {direction}
+        </Badge>
+      </TableCell>
+      <TableCell className="text-muted-foreground max-w-[200px] truncate" title={note}>
+        {note}
+      </TableCell>
+      <TableCell className={`text-right font-bold tabular-nums ${isIn ? "text-emerald-600" : "text-rose-600"}`}>
+        {isIn ? "+" : "-"}{formatUGX(Number(transaction.amount))}
+      </TableCell>
+      <TableCell className="text-right">
+        <div className="flex justify-end gap-1">
+          <Button 
+            size="icon" 
+            variant="ghost" 
+            onClick={() => setIsEditing(true)}
+            className="h-7 w-7 text-muted-foreground hover:text-primary"
+            title="Edit transaction"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+          <Button 
+            size="icon" 
+            variant="ghost" 
+            onClick={() => onDelete(transaction.id)}
+            className="h-7 w-7 text-muted-foreground hover:text-destructive"
+            title="Delete transaction"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+}
+
 // ── Sub-Components ─────────────────────────────────────────────────────────
 function StatCard({ label, value, icon: Icon, tone, isNet = false }: { label: string; value: number; icon: any; tone: "emerald" | "rose" | "indigo" | "amber"; isNet?: boolean }) {
   const tones: Record<string, string> = {
@@ -460,7 +778,7 @@ function StatCard({ label, value, icon: Icon, tone, isNet = false }: { label: st
   );
 }
 
-// ── UPDATED: Fully Editable Source Combobox ────────────────────────────────
+// ── Transaction Form ────────────────────────────────────────────────────────
 function TransactionForm({ onAdd, categories }: { onAdd: (e: Omit<Transaction, "id">) => Promise<boolean>; categories: string[] }) {
   const [direction, setDirection] = useState<"income" | "expense">("income");
   const [source, setSource] = useState("");
@@ -474,7 +792,6 @@ function TransactionForm({ onAdd, categories }: { onAdd: (e: Omit<Transaction, "
     const amt = Number(amount);
     if (!source.trim() || !amt || amt <= 0) return toast.error("Source and valid amount required");
     
-    // Saves custom source to 'type', and direction+note to 'description'
     const finalDescription = `${direction === "income" ? "Money In" : "Money Out"}${note.trim() ? ` | ${note.trim()}` : ""}`;
     
     setSubmitting(true);
