@@ -61,24 +61,20 @@ type Student = {
   balance: number;
   last_payment_date: string | null;
   payment_cycle_days: number;
-  paid_until: string | null; // NEW: Tracks when multi-month payments expire
+  paid_until: string | null;
 };
 
 const statusVariant = (s: Status): "secondary" | "default" | "outline" =>
   s === "graduated" ? "secondary" : s === "promoted" ? "default" : "outline";
 
-// ── UPDATED: Shows exact next payment date using paid_until if available ──
 function NextPaymentInfo({ student }: { student: Student }) {
   if (student.status === "graduated") return <span className="text-muted-foreground text-xs">—</span>;
   
-  // Determine the next due date
   let nextDue: Date | null = null;
   
-  // Priority 1: Use the exact paid_until date from multi-month payments
   if (student.paid_until) {
     nextDue = new Date(student.paid_until);
   } 
-  // Priority 2: Fallback to old 30-day cycle for students added before this feature
   else if (student.last_payment_date) {
     const last = new Date(student.last_payment_date);
     const cycleDays = student.payment_cycle_days ?? 30;
@@ -181,7 +177,6 @@ function StudentsPage() {
 
   useEffect(() => { setLevelFilter("all"); }, [courseFilter]);
 
-  // UPDATED: Overdue logic now respects paid_until
   const overdueStudents = useMemo(() =>
     students.filter(s => {
       if (s.status === "graduated") return false;
@@ -194,7 +189,7 @@ function StudentsPage() {
         nextDue = new Date(last);
         nextDue.setDate(nextDue.getDate() + (s.payment_cycle_days ?? 30));
       } else {
-        return true; // Awaiting first payment
+        return true; 
       }
       
       const today = new Date();
@@ -204,7 +199,6 @@ function StudentsPage() {
     }), [students]
   );
 
-  // UPDATED: Due soon logic now respects paid_until
   const dueSoonStudents = useMemo(() =>
     students.filter(s => {
       if (s.status === "graduated") return false;
@@ -217,7 +211,7 @@ function StudentsPage() {
         nextDue = new Date(last);
         nextDue.setDate(nextDue.getDate() + (s.payment_cycle_days ?? 30));
       } else {
-        return false; // Awaiting first payment is handled in overdue
+        return false; 
       }
       
       const today = new Date();
@@ -266,6 +260,11 @@ function StudentsPage() {
   };
 
   const saveEdit = async (updated: Student) => {
+    // If they updated the cycle days, we ensure the countdown starts from TODAY
+    // so legacy students don't instantly become overdue.
+    const todayStr = new Date().toISOString().split("T")[0];
+    const finalLastPaymentDate = updated.last_payment_date || todayStr;
+
     const { error } = await supabase.from("students").update({
       name: updated.name,
       reg_no: updated.reg_no,
@@ -274,6 +273,7 @@ function StudentsPage() {
       status: updated.status,
       balance: updated.balance,
       payment_cycle_days: updated.payment_cycle_days,
+      last_payment_date: finalLastPaymentDate,
     }).eq("id", updated.id);
     
     if (error) { toast.error("Update failed: " + error.message); return; }
@@ -303,7 +303,6 @@ function StudentsPage() {
         </Button>
       </header>
 
-      {/* ── Overdue Alert ── */}
       {overdueStudents.length > 0 && (
         <Card className="border-destructive/50 bg-destructive/5 p-4">
           <div className="flex items-center justify-between gap-3">
@@ -495,7 +494,7 @@ function StudentsPage() {
   );
 }
 
-// ── Edit Dialog ───────────────────────────────────────────────────────────
+// ── Edit Dialog (ENHANCED WITH DAYS FILTER) ──────────────────────────────
 function EditDialog({
   student, onClose, onSave,
 }: { student: Student | null; onClose: () => void; onSave: (s: Student) => void }) {
@@ -503,6 +502,15 @@ function EditDialog({
   useEffect(() => { setDraft(student); }, [student]);
   if (!student || !draft) return null;
   const levels = COURSES[draft.course]?.levels ?? [];
+
+  // Calculate the projected due date for the UI
+  const projectedDueDate = useMemo(() => {
+    if (!draft.last_payment_date) return "Not set";
+    const last = new Date(draft.last_payment_date);
+    const days = draft.payment_cycle_days ?? 30;
+    last.setDate(last.getDate() + days);
+    return last.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  }, [draft.last_payment_date, draft.payment_cycle_days]);
 
   return (
     <Dialog open={!!student} onOpenChange={o => !o && onClose()}>
@@ -545,10 +553,25 @@ function EditDialog({
               <Input type="number" value={draft.balance} onChange={e => setDraft({ ...draft, balance: Number(e.target.value) })} />
             </div>
             <div className="grid gap-2">
-              <Label>Payment Cycle (days)</Label>
-              <Input type="number" value={draft.payment_cycle_days ?? 30} onChange={e => setDraft({ ...draft, payment_cycle_days: Number(e.target.value) })} />
+              <Label className="text-primary font-semibold">Days Until Next Payment</Label>
+              <Input 
+                type="number" 
+                value={draft.payment_cycle_days ?? 30} 
+                onChange={e => setDraft({ ...draft, payment_cycle_days: Number(e.target.value) })} 
+                placeholder="e.g. 15, 30, 45"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                System will auto-calculate due date from today.
+              </p>
             </div>
           </div>
+          
+          {/* Visual indicator of the calculated date */}
+          <div className="rounded-lg bg-muted/50 p-3 text-sm flex items-center justify-between border border-dashed">
+            <span className="text-muted-foreground">Projected Next Due Date:</span>
+            <span className="font-bold text-primary">{projectedDueDate}</span>
+          </div>
+
           <div className="grid gap-2">
             <Label>Status</Label>
             <Select value={draft.status} onValueChange={(v: Status) => setDraft({ ...draft, status: v })}>
