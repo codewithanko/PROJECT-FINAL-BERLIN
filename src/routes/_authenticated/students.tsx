@@ -259,11 +259,10 @@ function StudentsPage() {
     fetchStudents();
   };
 
+  // ✅ FIXED: Always reset last_payment_date to today and clear paid_until 
+  // so the new manual cycle days take over immediately.
   const saveEdit = async (updated: Student) => {
-    // If they updated the cycle days, we ensure the countdown starts from TODAY
-    // so legacy students don't instantly become overdue.
     const todayStr = new Date().toISOString().split("T")[0];
-    const finalLastPaymentDate = updated.last_payment_date || todayStr;
 
     const { error } = await supabase.from("students").update({
       name: updated.name,
@@ -273,7 +272,8 @@ function StudentsPage() {
       status: updated.status,
       balance: updated.balance,
       payment_cycle_days: updated.payment_cycle_days,
-      last_payment_date: finalLastPaymentDate,
+      last_payment_date: todayStr,  // ✅ Always reset to today
+      paid_until: null,             // ✅ Clear this so cycle days take over
     }).eq("id", updated.id);
     
     if (error) { toast.error("Update failed: " + error.message); return; }
@@ -494,23 +494,26 @@ function StudentsPage() {
   );
 }
 
-// ── Edit Dialog (ENHANCED WITH DAYS FILTER) ──────────────────────────────
+// ── Edit Dialog (FIXED: Hooks moved above early return) ───────────────────
 function EditDialog({
   student, onClose, onSave,
 }: { student: Student | null; onClose: () => void; onSave: (s: Student) => void }) {
   const [draft, setDraft] = useState<Student | null>(null);
   useEffect(() => { setDraft(student); }, [student]);
-  if (!student || !draft) return null;
-  const levels = COURSES[draft.course]?.levels ?? [];
 
-  // Calculate the projected due date for the UI
+  // ✅ FIX: Move useMemo ABOVE the early return to satisfy React Rules of Hooks
   const projectedDueDate = useMemo(() => {
-    if (!draft.last_payment_date) return "Not set";
+    if (!draft?.last_payment_date) return "Not set";
     const last = new Date(draft.last_payment_date);
     const days = draft.payment_cycle_days ?? 30;
     last.setDate(last.getDate() + days);
     return last.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-  }, [draft.last_payment_date, draft.payment_cycle_days]);
+  }, [draft?.last_payment_date, draft?.payment_cycle_days]);
+
+  // Early return is now safely AFTER all hooks are declared
+  if (!student || !draft) return null;
+
+  const levels = COURSES[draft.course]?.levels ?? [];
 
   return (
     <Dialog open={!!student} onOpenChange={o => !o && onClose()}>
