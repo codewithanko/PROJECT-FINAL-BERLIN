@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   Plus, Pencil, Trash2, Receipt, AlertCircle, CheckCircle2,
-  Loader2, Search, CreditCard, TrendingUp, Users, Clock, Banknote, Calendar,
+  Loader2, Search, CreditCard, TrendingUp, Users, Clock, Banknote, Calendar, Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -153,11 +153,13 @@ function PaymentsPage() {
   const fetchOtherIncome = async () => {
     const { data } = await supabase.from("transactions")
       .select("*")
-      .like("description", "Other Income:%")
+      .like("description", "%Other Income:%")
       .order("date", { ascending: false });
     if (data) {
       setOtherIncome(data.map(t => {
-        const parts = t.description.replace("Other Income: ", "").split(" | ");
+        // ✅ Strip "Money In | " prefix if it exists, then parse
+        const cleanDesc = (t.description || "").replace(/^Money In \| /, "");
+        const parts = cleanDesc.replace("Other Income: ", "").split(" | ");
         return {
           id: t.id,
           source: parts[0] || "Unknown",
@@ -246,27 +248,20 @@ function PaymentsPage() {
     };
   }, [payments, students, overdueStudents]);
 
-  // ── FIXED: Smart calculation for Amount Due ──
   const getNewDue = (f: PaymentForm) => {
     const courseFee = COURSES[f.course]?.fee ?? 0;
-    
     if (editing) return courseFee * f.num_months;
-
     if (f.current_balance > 0 && f.num_months === 1) {
       return f.current_balance;
     }
-
     return f.current_balance + (courseFee * f.num_months);
   };
 
   const selectStudent = (s: Student) => {
     const courseFee = COURSES[s.course]?.fee ?? 0;
     const currentBalance = s.balance > 0 ? s.balance : 0;
-    
     let initialDue = courseFee;
-    if (currentBalance > 0) {
-      initialDue = currentBalance;
-    }
+    if (currentBalance > 0) initialDue = currentBalance;
 
     setForm(f => ({
       ...f,
@@ -341,7 +336,6 @@ function PaymentsPage() {
 
     setSubmitting(true);
 
-    // ── FIXED: Calculate paid_until as exactly 30 days per month from payment date ──
     const paymentDate = new Date(form.payment_date);
     const paidUntilDate = new Date(paymentDate);
     paidUntilDate.setDate(paymentDate.getDate() + (form.num_months * 30));
@@ -371,7 +365,6 @@ function PaymentsPage() {
       
       if (error) { toast.error("Failed to record: " + error.message); setSubmitting(false); return; }
 
-      // ── FIXED: Only update paid_until if payment covers at least one full month ──
       const courseFee = COURSES[form.course]?.fee ?? 0;
       const shouldUpdatePaidUntil = paid >= courseFee;
 
@@ -392,8 +385,10 @@ function PaymentsPage() {
         const startMonthStr = formatMonthYear(monthsArr[0]);
         
         await supabase.from("transactions").insert({
-          type: "income", amount: paid, date: form.payment_date,
-          description: `Payment — ${form.student_name} (${form.reg_no}) ${form.level ? `[${form.level}]` : ""} ${startMonthStr} to ${endMonthStr} (${form.num_months} month${form.num_months > 1 ? "s" : ""})`,
+          type: "income", 
+          amount: paid, 
+          date: form.payment_date,
+          description: `Money In | Payment — ${form.student_name} (${form.reg_no}) ${form.level ? `[${form.level}]` : ""} ${startMonthStr} to ${endMonthStr} (${form.num_months} month${form.num_months > 1 ? "s" : ""})`,
         });
       }
 
@@ -413,7 +408,8 @@ function PaymentsPage() {
     if (!otherIncomeForm.source.trim()) return toast.error("Source is required");
     if (!otherIncomeForm.amount) return toast.error("Amount is required");
     
-    const desc = `Other Income: ${otherIncomeForm.source} | Method: ${otherIncomeForm.method} | Note: ${otherIncomeForm.note}`;
+    // ✅ FIX: Added "Money In | " prefix so Accounts page recognizes it as income
+    const desc = `Money In | Other Income: ${otherIncomeForm.source} | Method: ${otherIncomeForm.method} | Note: ${otherIncomeForm.note}`;
     
     const { error } = await supabase.from("transactions").insert({
       type: "income",
@@ -437,11 +433,9 @@ function PaymentsPage() {
     fetchAll();
   };
 
-  // ── FIXED: Now deletes the associated transaction from the Accounts ledger! ──
   const confirmDelete = async () => {
     if (!deleting) return;
     
-    // 1. Delete the associated transaction from the transactions table
     if (deleting.amount_paid > 0) {
       await supabase
         .from("transactions")
@@ -453,7 +447,6 @@ function PaymentsPage() {
         .like("description", `%${deleting.reg_no}%`);
     }
 
-    // 2. Delete the payment record from the payments table
     const { error } = await supabase.from("payments").delete().eq("id", deleting.id);
     if (error) { 
       toast.error("Delete failed: " + error.message); 
@@ -463,6 +456,74 @@ function PaymentsPage() {
     toast.success("Payment record and transaction removed");
     setDeleting(null);
     fetchAll();
+  };
+
+  // ✅ NEW: Export Filtered Payments to CSV
+  const exportFilteredCSV = () => {
+    const headers = ["Date", "Student", "Reg No", "Course", "Level", "Period", "Method", "Due", "Paid", "Balance", "Status", "Note"];
+    const rows = filteredPayments.map(p => {
+      const monthsCovered = p.months_covered || 1;
+      const endMonth = getEndMonth(p.month_year, monthsCovered);
+      const period = monthsCovered > 1 ? `${formatMonthYear(p.month_year)} to ${formatMonthYear(endMonth)} (${monthsCovered} mos)` : formatMonthYear(p.month_year);
+      return [
+        p.payment_date,
+        `"${p.student_name.replace(/"/g, '""')}"`,
+        p.reg_no,
+        COURSES[p.course]?.label ?? p.course,
+        p.level || "—",
+        `"${period}"`,
+        p.method.replace("_", " "),
+        p.amount_due,
+        p.amount_paid,
+        p.balance,
+        p.status,
+        `"${(p.note || "").replace(/"/g, '""')}"`
+      ].join(",");
+    });
+    const csvContent = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `payments_filtered_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success("Filtered payments exported successfully");
+  };
+
+  // ✅ NEW: Export ALL Payments to CSV (Full Backup)
+  const exportAllCSV = () => {
+    const headers = ["Date", "Student", "Reg No", "Course", "Level", "Period", "Method", "Due", "Paid", "Balance", "Status", "Note"];
+    const rows = payments.map(p => {
+      const monthsCovered = p.months_covered || 1;
+      const endMonth = getEndMonth(p.month_year, monthsCovered);
+      const period = monthsCovered > 1 ? `${formatMonthYear(p.month_year)} to ${formatMonthYear(endMonth)} (${monthsCovered} mos)` : formatMonthYear(p.month_year);
+      return [
+        p.payment_date,
+        `"${p.student_name.replace(/"/g, '""')}"`,
+        p.reg_no,
+        COURSES[p.course]?.label ?? p.course,
+        p.level || "—",
+        `"${period}"`,
+        p.method.replace("_", " "),
+        p.amount_due,
+        p.amount_paid,
+        p.balance,
+        p.status,
+        `"${(p.note || "").replace(/"/g, '""')}"`
+      ].join(",");
+    });
+    const csvContent = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `payments_all_data_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success("All payments data exported successfully");
   };
 
   const availableMonths = useMemo(() => {
@@ -548,7 +609,17 @@ function PaymentsPage() {
                   {filterLevels.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <span className="text-sm text-muted-foreground ml-auto">
+              
+              {/* ✅ NEW: Export Buttons */}
+              <div className="flex items-center gap-2 ml-auto">
+                <Button variant="outline" size="sm" onClick={exportFilteredCSV}>
+                  <Download className="h-4 w-4 mr-1" /> Export Filtered
+                </Button>
+                <Button variant="default" size="sm" onClick={exportAllCSV}>
+                  <Download className="h-4 w-4 mr-1" /> Export All
+                </Button>
+              </div>
+              <span className="text-sm text-muted-foreground ml-2">
                 {filteredPayments.length} record{filteredPayments.length !== 1 ? "s" : ""}
               </span>
             </div>
@@ -795,7 +866,6 @@ function PaymentsPage() {
               </div>
             )}
 
-            {/* Multi-Month Selector */}
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-2">
                 <Label>Start Month</Label>
@@ -821,7 +891,6 @@ function PaymentsPage() {
               </div>
             </div>
 
-            {/* Visual indicator of months covered */}
             {form.student_id && form.num_months > 0 && (
               <div className="flex flex-wrap gap-2 p-3 bg-muted/50 rounded-lg border border-dashed">
                 <span className="text-xs font-semibold text-muted-foreground w-full mb-1 flex items-center gap-1">

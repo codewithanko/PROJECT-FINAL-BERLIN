@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { Trophy, Search, Save, Loader2, GraduationCap, Download, ArrowRightCircle } from "lucide-react";
+import { Trophy, Search, Save, Loader2, GraduationCap, Download, ArrowRightCircle, Calendar } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,7 +16,7 @@ export const Route = createFileRoute("/_authenticated/marks")({
   component: MarksPage,
 });
 
-// ── Course definitions (Synced with PROJECT BERLIN) ────────────────────────
+// ── Course definitions (Synced with Admissions & Students) ────────────────────────
 const COURSES: Record<string, { label: string; levels: string[] }> = {
   english: { label: "English", levels: ["Zero Level", "Pre Level", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5"] },
   computer: { label: "Computer", levels: ["Beginner", "Intermediate", "Advanced"] },
@@ -27,6 +27,10 @@ const COURSES: Record<string, { label: string; levels: string[] }> = {
   private_class: { label: "Private Class", levels: ["Private"] },
   private_class_2: { label: "Private Class 2", levels: ["Private"] },
 };
+
+// ✅ NEW: Academic year structure — 6 terms per year (6 × 8 weeks = 48 weeks)
+const TERMS_PER_YEAR = 6;
+const WEEKS_PER_TERM = 8;
 
 type Student = { id: string; name: string; reg_no: string; course: string; level: string; };
 type MarkRecord = {
@@ -48,11 +52,26 @@ function MarksPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // ── NEW: Term & Year States ───────────────────────────────────────────────
-  const [currentTerm, setCurrentTerm] = useState(1);
-  const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+  // ✅ NEW: Editable Term & Year Filters (defaults to current year/term)
+  const currentYear = new Date().getFullYear();
+  const [selectedYear, setSelectedYear] = useState<number>(currentYear);
+  const [selectedTerm, setSelectedTerm] = useState<number>(1);
 
-  // ── Fetch Data (Scoped to Current Term & Year) ────────────────────────────
+  // ✅ NEW: Generate year range (current year ± 2 years for easy navigation)
+  const availableYears = useMemo(() => {
+    const years: number[] = [];
+    for (let y = currentYear - 2; y <= currentYear + 2; y++) {
+      years.push(y);
+    }
+    return years;
+  }, []);
+
+  // ✅ NEW: Generate term options (Term 1 through Term 6)
+  const availableTerms = useMemo(() => {
+    return Array.from({ length: TERMS_PER_YEAR }, (_, i) => i + 1);
+  }, []);
+
+  // ── Fetch Data (Scoped to Selected Term & Year) ───────────────────────
   const fetchData = useCallback(async () => {
     setLoading(true);
     
@@ -71,8 +90,8 @@ function MarksPage() {
         .from("marks")
         .select("*")
         .in("student_id", studentIds)
-        .eq("term", currentTerm) // Filter by current term
-        .eq("year", currentYear); // Filter by current year
+        .eq("term", selectedTerm)
+        .eq("year", selectedYear);
       
       if (error) {
         console.error(error);
@@ -86,7 +105,7 @@ function MarksPage() {
       setMarksMap({});
     }
     setLoading(false);
-  }, [selectedCourse, selectedLevel, currentTerm, currentYear]);
+  }, [selectedCourse, selectedLevel, selectedTerm, selectedYear]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -110,7 +129,7 @@ function MarksPage() {
     });
   };
 
-  // ── Save to Supabase (Includes Term & Year) ───────────────────────────────
+  // ── Save to Supabase (Includes Selected Term & Year) ──────────────────
   const saveMarks = async (studentId: string) => {
     setSavingId(studentId);
     const record = marksMap[studentId];
@@ -118,8 +137,8 @@ function MarksPage() {
 
     const payload = {
       student_id: studentId,
-      term: currentTerm,
-      year: currentYear,
+      term: selectedTerm,
+      year: selectedYear,
       week_1: record.week_1 || 0, week_2: record.week_2 || 0, week_3: record.week_3 || 0, week_4: record.week_4 || 0,
       week_5: record.week_5 || 0, week_6: record.week_6 || 0, week_7: record.week_7 || 0, week_8: record.week_8 || 0,
       remarks: record.remarks || "",
@@ -138,21 +157,22 @@ function MarksPage() {
     setSavingId(null);
   };
 
-  // ── NEW: End Term Logic ───────────────────────────────────────────────────
-  const handleEndTerm = () => {
-    if (!confirm(`Are you sure you want to mark the end of Term ${currentTerm}, ${currentYear}? The system will advance to the next term.`)) return;
+  // ✅ UPDATED: Advance to Next Term (now works with selected filters)
+  const handleAdvanceTerm = () => {
+    if (!confirm(`Advance from Term ${selectedTerm}, ${selectedYear} to the next term? All records for the current term are safely preserved in the system.`)) return;
     
-    if (currentTerm >= 6) {
-      setCurrentTerm(1);
-      setCurrentYear(prev => prev + 1);
-      toast.success(`Academic Year Complete! Advanced to Term 1, ${currentYear + 1}`);
+    if (selectedTerm >= TERMS_PER_YEAR) {
+      // Roll over to Term 1 of next year
+      setSelectedTerm(1);
+      setSelectedYear(prev => prev + 1);
+      toast.success(`Academic Year Complete! Advanced to Term 1, ${selectedYear + 1}`);
     } else {
-      setCurrentTerm(prev => prev + 1);
-      toast.success(`Advanced to Term ${currentTerm + 1}, ${currentYear}`);
+      setSelectedTerm(prev => prev + 1);
+      toast.success(`Advanced to Term ${selectedTerm + 1}, ${selectedYear}`);
     }
   };
 
-  // ── NEW: Export Backup Logic ──────────────────────────────────────────────
+  // ✅ UPDATED: Export Backup (uses selected term/year in filename)
   const exportTermBackup = () => {
     if (students.length === 0) return toast.error("No students in this class to export");
     
@@ -163,6 +183,8 @@ function MarksPage() {
         "Student Name": s.name,
         "Course": COURSES[selectedCourse].label,
         "Level": selectedLevel,
+        "Academic Year": selectedYear,
+        "Term": selectedTerm,
         "Week 1": m?.week_1 ?? "",
         "Week 2": m?.week_2 ?? "",
         "Week 3": m?.week_3 ?? "",
@@ -179,12 +201,16 @@ function MarksPage() {
 
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, `Term ${currentTerm}`);
-    XLSX.writeFile(wb, `Marks_Backup_Term${currentTerm}_${currentYear}.xlsx`);
-    toast.success("Term records backed up to Excel!");
+    XLSX.utils.book_append_sheet(wb, ws, `Term ${selectedTerm}`);
+    
+    const courseName = COURSES[selectedCourse].label.replace(/\s+/g, '_');
+    const levelName = selectedLevel.replace(/\s+/g, '_');
+    XLSX.writeFile(wb, `Marks_${courseName}_${levelName}_Term${selectedTerm}_${selectedYear}.xlsx`);
+    
+    toast.success(`Term ${selectedTerm}, ${selectedYear} records backed up to Excel!`);
   };
 
-  // ── Calculations ──────────────────────────────────────────────────────────
+  // ── Calculations ─────────────────────────────────────────────────────
   const getAvg = (m: MarkRecord | undefined) => {
     if (!m) return null;
     const weeks = [m.week_1, m.week_2, m.week_3, m.week_4, m.week_5, m.week_6, m.week_7, m.week_8].filter((w): w is number => w !== null && w !== 0);
@@ -220,24 +246,25 @@ function MarksPage() {
     <div className="space-y-8">
       <header>
         <h1 className="text-3xl font-bold tracking-tight">Marks Entry</h1>
-        <p className="text-muted-foreground mt-1">8-week assessment — select a class to begin filling marks</p>
+        <p className="text-muted-foreground mt-1">8-week assessment — select a class and academic period to begin filling marks</p>
       </header>
 
       {topStudent && (
-        <div className="rounded-2xl border bg-warning/10 border-warning/30 p-6 flex items-center gap-5 transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
-          <div className="h-14 w-14 rounded-xl bg-warning/20 flex items-center justify-center">
-            <Trophy className="h-7 w-7 text-warning-foreground" />
+        <div className="rounded-2xl border bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800 p-6 flex items-center gap-5 transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+          <div className="h-14 w-14 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center">
+            <Trophy className="h-7 w-7 text-amber-600 dark:text-amber-400" />
           </div>
           <div className="flex-1">
-            <p className="text-xs font-semibold tracking-widest text-warning-foreground/80">TOP STUDENT ({COURSES[selectedCourse].label} - {selectedLevel})</p>
+            <p className="text-xs font-semibold tracking-widest text-amber-700 dark:text-amber-400">TOP STUDENT ({COURSES[selectedCourse].label} - {selectedLevel})</p>
             <p className="text-xl font-bold mt-1">{topStudent.name}</p>
             <p className="text-sm text-muted-foreground">Average: {topStudent.avg}% · Grade {getGrade(topStudent.avg)}</p>
           </div>
         </div>
       )}
 
-      {/* Navigation, Term Controls & Filters */}
+      {/* ✅ NEW: Class, Academic Period & Search Filters */}
       <div className="rounded-2xl border bg-card p-4 flex flex-wrap items-center gap-4">
+        {/* Course & Level */}
         <div className="flex gap-3 flex-1 min-w-[300px]">
           <Select value={selectedCourse} onValueChange={handleCourseChange}>
             <SelectTrigger className="w-[200px]"> <SelectValue /> </SelectTrigger>
@@ -257,21 +284,43 @@ function MarksPage() {
           </Select>
         </div>
 
-        {/* Term & Year Controls */}
-        <div className="flex items-center gap-3 bg-muted/50 px-4 py-2 rounded-lg border">
-          <div className="text-center">
-            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Current Term</p>
-            <p className="text-lg font-bold leading-tight">Term {currentTerm} • {currentYear}</p>
+        {/* ✅ NEW: Academic Period Filters (Year & Term) */}
+        <div className="flex items-center gap-2 bg-muted/50 px-4 py-2 rounded-lg border">
+          <Calendar className="h-4 w-4 text-primary" />
+          <div className="flex items-center gap-2">
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Year</p>
+              <Select value={String(selectedYear)} onValueChange={(v) => setSelectedYear(Number(v))}>
+                <SelectTrigger className="w-[100px] h-8 text-sm"> <SelectValue /> </SelectTrigger>
+                <SelectContent>
+                  {availableYears.map(y => (
+                    <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Term</p>
+              <Select value={String(selectedTerm)} onValueChange={(v) => setSelectedTerm(Number(v))}>
+                <SelectTrigger className="w-[110px] h-8 text-sm"> <SelectValue /> </SelectTrigger>
+                <SelectContent>
+                  {availableTerms.map(t => (
+                    <SelectItem key={t} value={String(t)}>Term {t}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <Button 
             size="sm" 
-            onClick={handleEndTerm} 
-            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+            onClick={handleAdvanceTerm} 
+            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 ml-2"
           >
-            <ArrowRightCircle className="h-4 w-4" /> End Term
+            <ArrowRightCircle className="h-4 w-4" /> Advance Term
           </Button>
         </div>
 
+        {/* Search */}
         <div className="relative flex-1 min-w-[220px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input 
@@ -282,6 +331,7 @@ function MarksPage() {
           />
         </div>
         
+        {/* Count & Export */}
         <div className="flex items-center gap-2 ml-auto">
           <Badge variant="outline">
             {filteredStudents.length} student{filteredStudents.length !== 1 ? "s" : ""}
@@ -289,6 +339,19 @@ function MarksPage() {
           <Button variant="outline" onClick={exportTermBackup} className="gap-1.5">
             <Download className="h-4 w-4" /> Backup Term
           </Button>
+        </div>
+      </div>
+
+      {/* ✅ NEW: Info Banner about Selected Period */}
+      <div className="rounded-xl bg-primary/5 border border-primary/20 p-4 flex items-center gap-3">
+        <Calendar className="h-5 w-5 text-primary shrink-0" />
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-primary">
+            Viewing: Term {selectedTerm}, {selectedYear} · {COURSES[selectedCourse].label} - {selectedLevel}
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Each term contains {WEEKS_PER_TERM} weeks of assessment. Records are preserved per term/year for future reference and export.
+          </p>
         </div>
       </div>
 
@@ -309,7 +372,7 @@ function MarksPage() {
             <thead className="bg-muted/50 text-muted-foreground text-xs uppercase tracking-wide">
               <tr>
                 <th className="text-left font-medium px-4 py-3 sticky left-0 bg-muted/50 z-10">Student</th>
-                {Array.from({ length: 8 }).map((_, i) => (
+                {Array.from({ length: WEEKS_PER_TERM }).map((_, i) => (
                   <th key={i} className="px-2 py-3 text-center font-medium w-16">W{i + 1}</th>
                 ))}
                 <th className="px-3 py-3 text-center font-medium w-16">Avg</th>
@@ -331,19 +394,22 @@ function MarksPage() {
                       <div>{s.name}</div>
                       <div className="text-xs text-muted-foreground font-normal">{s.reg_no}</div>
                     </td>
-                    {[1, 2, 3, 4, 5, 6, 7, 8].map(w => (
-                      <td key={w} className="px-1.5 py-2">
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          value={m?.[`week_${w}` as keyof MarkRecord] ?? ""}
-                          onChange={e => updateMark(s.id, w, e.target.value)}
-                          placeholder="—"
-                          className="w-full h-9 text-center rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring transition-all"
-                        />
-                      </td>
-                    ))}
+                    {Array.from({ length: WEEKS_PER_TERM }).map((_, i) => {
+                      const w = i + 1;
+                      return (
+                        <td key={w} className="px-1.5 py-2">
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            value={m?.[`week_${w}` as keyof MarkRecord] ?? ""}
+                            onChange={e => updateMark(s.id, w, e.target.value)}
+                            placeholder="—"
+                            className="w-full h-9 text-center rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring transition-all"
+                          />
+                        </td>
+                      );
+                    })}
                     <td className="px-3 py-3 text-center font-semibold">{a ?? "—"}</td>
                     <td className="px-3 py-3 text-center font-bold">{getGrade(a)}</td>
                     <td className="px-3 py-3">

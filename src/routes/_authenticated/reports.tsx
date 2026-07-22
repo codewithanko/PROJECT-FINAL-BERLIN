@@ -1,13 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { 
   Users, Wallet, Receipt, GraduationCap, Download, FileText, 
-  Loader2, Briefcase, TrendingUp, TrendingDown, Activity, DollarSign,
-  BarChart as BarChartIcon, PieChart as PieChartIcon
+  Loader2, Briefcase, TrendingUp, TrendingDown,
+  BarChart as BarChartIcon
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   PieChart, Pie, Cell, Legend,
@@ -20,36 +19,33 @@ export const Route = createFileRoute("/_authenticated/reports")({
   component: ReportsPage,
 });
 
-//  VIBRANT COLOR PALETTE FOR CHARTS
+// ✅ VIBRANT COLOR PALETTE FOR CHARTS
 const COLORS = [
-  "#3b82f6", // Blue (Primary)
-  "#10b981", // Green (Success)
-  "#f59e0b", // Amber (Warning)
-  "#ef4444", // Red (Destructive)
-  "#8b5cf6", // Violet
-  "#ec4899", // Pink
-  "#6366f1", // Indigo
-  "#14b8a6", // Teal
-  "#f97316", // Orange
-  "#64748b", // Slate
+  "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", 
+  "#ec4899", "#6366f1", "#14b8a6", "#f97316", "#64748b",
 ];
 
-// Local definitions
+// ✅ FIXED: Added all courses to match admissions/students pages
 const COURSES: Record<string, { label: string }> = {
-  english: { label: "English" }, computer: { label: "Computer" },
-  computer_english: { label: "Computer & English" }, french: { label: "French" },
-  kiswahili: { label: "Kiswahili" }, private_class: { label: "Private Class" },
+  english: { label: "English" }, 
+  computer: { label: "Computer" },
+  computer_english: { label: "Computer & English" }, 
+  french: { label: "French" },
+  kiswahili: { label: "Kiswahili" }, 
+  german: { label: "German" },
+  private_class: { label: "Private Class" },
+  private_class_2: { label: "Private Class 2" },
 };
 
-const fmtUGX = (n: number) => `UGX ${Number(n).toLocaleString()}`;
+const fmtUGX = (n: number) => `UGX ${Number(n).toLocaleString("en-UG")}`;
 type ReportKey = "students" | "finance" | "academic" | "graduation" | "staff";
 
 const actions: { key: ReportKey; label: string; icon: any; tint: string; desc: string }[] = [
-  { key: "students", label: "Student Report", icon: Users, tint: "bg-info/10 text-info", desc: "Enrolment, courses & balances" },
-  { key: "finance", label: "Finance Report", icon: Wallet, tint: "bg-success/10 text-success", desc: "Income, expenses & cashflow" },
-  { key: "academic", label: "Academic Report", icon: Receipt, tint: "bg-warning/15 text-warning-foreground", desc: "Attendance & performance" },
-  { key: "graduation", label: "Graduation Report", icon: GraduationCap, tint: "bg-accent text-primary", desc: "Completion rates & alumni" },
-  { key: "staff", label: "Staff & Payroll", icon: Briefcase, tint: "bg-primary/10 text-primary", desc: "Payroll, advances & net pay" },
+  { key: "students", label: "Student Report", icon: Users, tint: "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400", desc: "Enrolment, courses & balances" },
+  { key: "finance", label: "Finance Report", icon: Wallet, tint: "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400", desc: "Income, expenses & cashflow" },
+  { key: "academic", label: "Academic Report", icon: Receipt, tint: "bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400", desc: "Attendance & performance" },
+  { key: "graduation", label: "Graduation Report", icon: GraduationCap, tint: "bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400", desc: "Completion rates & alumni" },
+  { key: "staff", label: "Staff & Payroll", icon: Briefcase, tint: "bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400", desc: "Payroll, advances & net pay" },
 ];
 
 function ReportsPage() {
@@ -78,7 +74,8 @@ function ReportsPage() {
       const { data: studentsData } = await supabase.from("students").select("*");
       if (studentsData) {
         const sRows = studentsData.map(s => ({
-          name: s.name || "N/A", reg: s.reg_no || "N/A",
+          name: s.name || "N/A", 
+          reg: s.reg_no || "N/A",
           course: COURSES[s.course]?.label || s.course || "Unknown",
           status: s.status ? s.status.charAt(0).toUpperCase() + s.status.slice(1) : "Unknown",
           balance: Number(s.balance) || 0,
@@ -94,7 +91,8 @@ function ReportsPage() {
         setStudentsByCourse(Object.entries(courseCounts).map(([course, students]) => ({ course, students })));
 
         const graduatedCount = studentsData.filter(s => s.status === "graduated").length;
-        const activeCount = studentsData.filter(s => s.status === "active").length;
+        // ✅ FIXED: Include "promoted" students in the active count
+        const activeCount = studentsData.filter(s => s.status === "active" || s.status === "promoted").length;
         setGraduationRows([{ year: "Current", intake: activeCount + graduatedCount, graduated: graduatedCount }]);
       }
 
@@ -110,10 +108,11 @@ function ReportsPage() {
           if (!monthly[monthKey]) monthly[monthKey] = { income: 0, expenses: 0 };
           
           const amt = Number(t.amount);
-          if (t.type === "income") monthly[monthKey].income += amt;
-          else if (t.type === "expense") {
+          if (t.type === "income") {
+            monthly[monthKey].income += amt;
+          } else if (t.type === "expense") {
             monthly[monthKey].expenses += amt;
-            const cat = t.description?.split("—")[0]?.trim() || "Uncategorized";
+            const cat = t.description?.split("|")[0]?.trim() || "Uncategorized";
             categories[cat] = (categories[cat] || 0) + amt;
           }
         });
@@ -126,21 +125,26 @@ function ReportsPage() {
         setExpenseCategories(Object.entries(categories).map(([name, value]) => ({ name, value })));
       }
 
-      // 3. Fetch Staff Payroll
-      const { data: payrollData } = await supabase.from("staff_payroll_payments").select(`
-        id, period_label, base_amount, advance_deduction, net_pay, paid,
-        staff_members ( full_name, role )
-      `);
-      if (payrollData) {
-        setStaffPayroll(payrollData.map(p => ({
-          name: p.staff_members?.full_name || "Unknown",
-          role: p.staff_members?.role || "Staff",
-          period: p.period_label,
-          base: Number(p.base_amount),
-          advance: Number(p.advance_deduction),
-          net: Number(p.net_pay),
-          paid: p.paid
-        })));
+      // 3. Fetch Staff Payroll (Gracefully handles if table doesn't exist yet)
+      try {
+        const { data: payrollData } = await supabase.from("staff_payroll_payments").select(`
+          id, period_label, base_amount, advance_deduction, net_pay, paid,
+          staff_members ( full_name, role )
+        `);
+        if (payrollData) {
+          setStaffPayroll(payrollData.map((p: any) => ({
+            name: p.staff_members?.full_name || "Unknown",
+            role: p.staff_members?.role || "Staff",
+            period: p.period_label,
+            base: Number(p.base_amount),
+            advance: Number(p.advance_deduction),
+            net: Number(p.net_pay),
+            paid: p.paid
+          })));
+        }
+      } catch (e) {
+        // Table might not exist yet, which is fine
+        console.log("Payroll table not found or not ready yet.");
       }
 
       setLoading(false);
@@ -148,19 +152,19 @@ function ReportsPage() {
     fetchData();
   }, []);
 
-  //  DOCX EXPORT FUNCTION ──────────────────────────────────────────────────
+  // ─ DOCX EXPORT FUNCTION ──────────────────────────────────────────────────
   async function exportDocx() {
     setExporting(true);
     try {
       const { head, rows } = getTableData(selected, studentRows, financeRows, [], graduationRows, staffPayroll);
-      let tableHtml = `<table border="1" style="border-collapse: collapse; width: 100%; font-family: Arial; font-size: 12px;">`;
-      tableHtml += `<tr style="background-color: #141937; color: white;">${head.map(h => `<th style="padding: 8px; text-align: left;">${h}</th>`).join('')}</tr>`;
-      rows.forEach(row => {
-        tableHtml += `<tr>${row.map(cell => `<td style="padding: 8px; border: 1px solid #ddd;">${cell}</td>`).join('')}</tr>`;
+      let tableHtml = `<table border="1" style="border-collapse: collapse; width: 100%; font-family: Arial, sans-serif; font-size: 12px;">`;
+      tableHtml += `<tr style="background-color: #0f172a; color: white;">${head.map(h => `<th style="padding: 10px; text-align: left;">${h}</th>`).join('')}</tr>`;
+      rows.forEach((row: any) => {
+        tableHtml += `<tr>${row.map((cell: any) => `<td style="padding: 10px; border: 1px solid #e2e8f0;">${cell}</td>`).join('')}</tr>`;
       });
       tableHtml += `</table>`;
 
-      const html = `<html><body>${tableHtml}</body></html>`;
+      const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><title>Export HTML to Word Document</title></head><body>${tableHtml}</body></html>`;
       const blob = new Blob([html], { type: 'application/msword' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -171,7 +175,7 @@ function ReportsPage() {
       document.body.removeChild(link);
       toast.success("Document exported successfully!");
     } catch (e: any) {
-      toast.error("Failed to export document");
+      toast.error("Failed to export document: " + e.message);
     } finally {
       setExporting(false);
     }
@@ -197,7 +201,7 @@ function ReportsPage() {
           const active = a.key === selected;
           return (
             <button key={a.key} onClick={() => setSelected(a.key)} className={cn(
-              "stat-card-premium rounded-2xl border bg-card p-5 text-left transition-all duration-300",
+              "rounded-2xl border bg-card p-5 text-left transition-all duration-300 hover:shadow-md",
               active && "border-primary ring-2 ring-primary/30 shadow-lg",
             )}>
               <div className={cn("h-10 w-10 rounded-xl flex items-center justify-center mb-3", a.tint)}>
@@ -244,11 +248,9 @@ function ReportsPage() {
 // ── Chart Component (With Sub-Reports) ──────────────────────────────────────
 function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories, graduationRows, staffPayroll, financeView, setFinanceView }: any) {
   
-  //  FINANCE SUB-REPORTS DASHBOARD ──
   if (kind === "finance") {
     return (
       <div className="space-y-6">
-        {/* Report Selector Buttons */}
         <div className="flex gap-2 p-1 bg-muted/30 rounded-lg w-fit">
           <Button variant={financeView === "all" ? "default" : "ghost"} size="sm" onClick={() => setFinanceView("all")}>
             <BarChartIcon className="h-4 w-4 mr-2" /> Full Finance
@@ -261,21 +263,18 @@ function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories
           </Button>
         </div>
 
-        {/* Chart Area */}
         <div className="h-80">
           {financeMonthly.length > 0 ? (
             <ResponsiveContainer>
               <BarChart data={financeMonthly}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                 <XAxis dataKey="month" />
-                <YAxis tickFormatter={(v) => `${(v / 1_000_000).toFixed(1)}M`} />
+                <YAxis tickFormatter={(v: number) => `${(v / 1_000_000).toFixed(1)}M`} />
                 <Tooltip formatter={(v: number) => fmtUGX(v)} />
                 <Legend />
-                {/* Only show Income Bar if view is 'all' or 'income' */}
                 {(financeView === "all" || financeView === "income") && (
                   <Bar dataKey="income" name="Income" fill="#10b981" radius={[6, 6, 0, 0]} />
                 )}
-                {/* Only show Expense Bar if view is 'all' or 'expense' */}
                 {(financeView === "all" || financeView === "expense") && (
                   <Bar dataKey="expenses" name="Expenses" fill="#ef4444" radius={[6, 6, 0, 0]} />
                 )}
@@ -284,7 +283,6 @@ function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories
           ) : <div className="h-full flex items-center justify-center text-muted-foreground">No finance data yet</div>}
         </div>
 
-        {/* Expense Categories Pie Chart (Only shows on 'all' or 'expense' view) */}
         {(financeView === "all" || financeView === "expense") && expenseCategories.length > 0 && (
           <div className="h-64">
             <p className="text-sm font-medium mb-2 text-muted-foreground">Expense Breakdown by Category</p>
@@ -305,7 +303,6 @@ function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories
     );
   }
 
-  //  STUDENTS REPORT (Colorful Bars) ──
   if (kind === "students") {
     return (
       <div className="h-80">
@@ -329,7 +326,6 @@ function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories
     );
   }
 
-  //  STAFF REPORT (Colorful Bars) ──
   if (kind === "staff") {
     return (
       <div className="h-80">
@@ -339,7 +335,7 @@ function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories
             <BarChart data={staffPayroll}>
               <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
               <XAxis dataKey="name" />
-              <YAxis tickFormatter={(v) => `${(v / 1_000_000).toFixed(1)}M`} />
+              <YAxis tickFormatter={(v: number) => `${(v / 1_000_000).toFixed(1)}M`} />
               <Tooltip formatter={(v: number) => fmtUGX(v)} />
               <Bar dataKey="net" name="Net Pay" radius={[6, 6, 0, 0]}>
                 {staffPayroll.map((_: any, i: number) => (
@@ -353,7 +349,6 @@ function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories
     );
   }
 
-  //  GRADUATION REPORT ──
   return (
     <div className="h-80">
       <p className="text-sm font-medium mb-2">Intake vs Graduates</p>
@@ -410,6 +405,6 @@ function getTableData(kind: string, studentRows: any[], financeRows: any[], acad
   };
   return {
     head: ["Year", "Intake", "Graduated", "Rate"],
-    rows: graduationRows.map((g) => [String(g.year), String(g.intake), String(g.graduated), `${Math.round((g.graduated / g.intake) * 100)}%`]),
+    rows: graduationRows.map((g) => [String(g.year), String(g.intake), String(g.graduated), `${g.intake > 0 ? Math.round((g.graduated / g.intake) * 100) : 0}%`]),
   };
 }

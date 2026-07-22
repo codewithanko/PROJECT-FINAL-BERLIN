@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
-import { UserPlus, Receipt, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { UserPlus, Receipt, CheckCircle2, AlertCircle, Loader2, History, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,17 +37,26 @@ function formatUGX(n: number) {
   return `UGX ${n.toLocaleString("en-UG")}`;
 }
 
+function monthYearOf(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 function AdmissionsPage() {
   const navigate = useNavigate();
   const [submitting, setSubmitting] = useState(false);
-  
+
   // Form fields
   const [name, setName] = useState("");
   const [regNo, setRegNo] = useState("");
   const [phone, setPhone] = useState("");
   const [course, setCourse] = useState<CourseKey>("english");
   const [level, setLevel] = useState<string>(COURSES.english.levels[0]);
-  
+
+  // ── Enrolment type: New vs Existing (already-at-school) student ──
+  const [isExisting, setIsExisting] = useState(false);
+  const [monthsAtSchool, setMonthsAtSchool] = useState(1);
+  const [paidConsistently, setPaidConsistently] = useState(true);
+
   // Payment fields
   const [includeRegFee, setIncludeRegFee] = useState(true);
   const [numMonths, setNumMonths] = useState(1);
@@ -56,19 +65,34 @@ function AdmissionsPage() {
   // Auto-generate reg number
   useEffect(() => {
     const generate = async () => {
-      const { count } = await supabase.from("students").select("*", { count: "exact", head: true });
-      const next = (count ?? 0) + 1;
+      const { data } = await supabase
+        .from("students")
+        .select("reg_no")
+        .order("reg_no", { ascending: false })
+        .limit(1);
+
+      let next = 1;
+      if (data && data.length > 0) {
+        const match = data[0].reg_no.match(/(\d+)$/);
+        if (match) next = parseInt(match[1], 10) + 1;
+      }
       setRegNo(`SSL-${String(next).padStart(4, "0")}`);
     };
     generate();
   }, []);
+
+  // When switching to "Existing Student", registration fee is usually
+  // already paid historically — default it off, but leave it editable.
+  useEffect(() => {
+    setIncludeRegFee(!isExisting);
+  }, [isExisting]);
 
   const onCourseChange = (v: CourseKey) => {
     setCourse(v);
     setLevel(COURSES[v].levels[0]);
   };
 
-  // ── Fee calculations ───────────────────────────────────────────────────
+  // ── Fee calculations ──────────────────────────────────────────────────
   const monthlyFee = COURSES[course].fee;
   const tuitionFee = monthlyFee * numMonths;
   const regFee = includeRegFee ? REGISTRATION_FEE : 0;
@@ -84,10 +108,11 @@ function AdmissionsPage() {
     if (!regNo.trim()) return toast.error("Registration number is required");
     if (paid < 0) return toast.error("Amount paid cannot be negative");
     if (isOverpaid) return toast.error("Amount paid exceeds total due");
+    if (isExisting && monthsAtSchool < 0) return toast.error("Months at school cannot be negative");
 
     setSubmitting(true);
 
-    // ── FIXED: Calculate paid_until as exactly 30 days per month from today ──
+    // ── Calculate paid_until as exactly 30 days per month from today ──
     let paidUntilStr: string | null = null;
     if (paid > 0 && numMonths > 0) {
       const now = new Date();
@@ -95,6 +120,15 @@ function AdmissionsPage() {
       paidUntilDate.setDate(now.getDate() + (numMonths * 30));
       paidUntilStr = paidUntilDate.toISOString().slice(0, 10);
     }
+
+    // ── enrolled_date: backdated for existing students ──
+    const enrolledDate = isExisting
+      ? (() => {
+          const d = new Date();
+          d.setDate(d.getDate() - monthsAtSchool * 30);
+          return d.toISOString().split("T")[0];
+        })()
+      : new Date().toISOString().split("T")[0];
 
     // 1. Insert Student
     const { error: studentError } = await supabase.from("students").insert({
@@ -107,6 +141,7 @@ function AdmissionsPage() {
       last_payment_date: paid > 0 ? new Date().toISOString().split("T")[0] : null,
       payment_cycle_days: 30,
       paid_until: paidUntilStr,
+      enrolled_date: enrolledDate,
     });
 
     if (studentError) {
@@ -115,41 +150,86 @@ function AdmissionsPage() {
       return;
     }
 
-    // 2. Record payment if any amount was paid
-    if (paid > 0) {
-      const { data: studentData } = await supabase
-        .from("students")
-        .select("id")
-        .eq("reg_no", regNo.trim())
-        .single();
+    // Fetch the new student's id
+    const { data: studentData } = await supabase
+      .from("students")
+      .select("id")
+      .eq("reg_no", regNo.trim())
+      .single();
 
-      if (studentData) {
-        const currentMonthYear = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
-        const status = paid >= totalDue ? "paid" : "partial";
+    // 2. Record CURRENT admission-day payment if any amount was paid
+    if (paid > 0 && studentData) {
+      const currentMonthYear = monthYearOf(new Date());
+      const status = paid >= totalDue ? "paid" : "partial";
+      
+      await supabase.from("payments").insert({
+        student_id: studentData.id,
+        student_name: name.trim(),
+        reg_no: regNo.trim(),
+        course,
+        level,
+        amount_due: totalDue,
+        amount_paid: paid,
+        balance: Math.max(0, balance),
+        method: "cash",
+        payment_date: new Date().toISOString().split("T")[0],
+        month_year: currentMonthYear,
+        months_covered: numMonths,
+        status,
+        note: isExisting ? "Admission payment (existing student — current dues)" : "Admission payment",
+      });
+
+      // ✅ FIX: Added "Money In | " so the Accountant's page sees this as income
+      await supabase.from("transactions").insert({
+        type: "income",
+        amount: paid,
+        date: new Date().toISOString().split("T")[0],
+        description: `Money In | Admission payment — ${name.trim()} (${regNo.trim()}) [${level}] ${numMonths} month(s)${includeRegFee ? " incl. reg fee" : ""}`,
+      });
+    }
+
+    // 3. Backfill HISTORICAL payments for an existing student
+    if (isExisting && paidConsistently && monthsAtSchool > 0 && studentData) {
+      const paymentRows = [];
+      const transactionRows = [];
+      
+      for (let i = monthsAtSchool; i >= 1; i--) {
+        const paymentDate = new Date();
+        paymentDate.setMonth(paymentDate.getMonth() - i);
+        const dateStr = paymentDate.toISOString().split("T")[0];
+        const monthYear = monthYearOf(paymentDate);
         
-        await supabase.from("payments").insert({
+        paymentRows.push({
           student_id: studentData.id,
           student_name: name.trim(),
           reg_no: regNo.trim(),
           course,
           level,
-          amount_due: totalDue,
-          amount_paid: paid,
-          balance: Math.max(0, balance),
+          amount_due: monthlyFee,
+          amount_paid: monthlyFee,
+          balance: 0,
           method: "cash",
-          payment_date: new Date().toISOString().split("T")[0],
-          month_year: currentMonthYear,
-          months_covered: numMonths,
-          status,
-          note: "Admission payment",
+          payment_date: dateStr,
+          month_year: monthYear,
+          months_covered: 1,
+          status: "paid",
+          note: "Backfilled — historical payment prior to system setup",
         });
-
-        await supabase.from("transactions").insert({
+        
+        // ✅ FIX: Added "Money In | " so historical payments also show in Accounts
+        transactionRows.push({
           type: "income",
-          amount: paid,
-          date: new Date().toISOString().split("T")[0],
-          description: `Admission payment — ${name.trim()} (${regNo.trim()}) [${level}] ${numMonths} month(s)${includeRegFee ? " incl. reg fee" : ""}`,
+          amount: monthlyFee,
+          date: dateStr,
+          description: `Money In | Historical payment — ${name.trim()} (${regNo.trim()}) [${monthYear}]`,
         });
+      }
+      
+      const { error: backfillError } = await supabase.from("payments").insert(paymentRows);
+      if (backfillError) {
+        toast.error("Historical backfill failed: " + backfillError.message);
+      } else {
+        await supabase.from("transactions").insert(transactionRows);
       }
     }
 
@@ -175,12 +255,94 @@ function AdmissionsPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         {/* ── Left: Form ── */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Enrolment Type */}
+          <section className="rounded-2xl border bg-card p-6 space-y-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              <Sparkles className="h-4 w-4" /> Enrolment Type
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setIsExisting(false)}
+                className={`rounded-xl border-2 p-4 text-left transition-colors ${
+                  !isExisting ? "border-primary bg-primary/5" : "border-border hover:bg-muted/40"
+                }`}
+              >
+                <div className="flex items-center gap-2 font-semibold text-sm">
+                  <UserPlus className="h-4 w-4" /> New Student
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Joining Sandstone for the first time, starting today.
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsExisting(true)}
+                className={`rounded-xl border-2 p-4 text-left transition-colors ${
+                  isExisting ? "border-primary bg-primary/5" : "border-border hover:bg-muted/40"
+                }`}
+              >
+                <div className="flex items-center gap-2 font-semibold text-sm">
+                  <History className="h-4 w-4" /> Existing Student
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Already at the school before this system — being entered now.
+                </p>
+              </button>
+            </div>
+            {isExisting && (
+              <div className="rounded-lg border bg-muted/40 p-4 space-y-4">
+                <div className="grid gap-2 max-w-[240px]">
+                  <Label>Months already spent at school</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={monthsAtSchool}
+                    onChange={e => setMonthsAtSchool(Number(e.target.value))}
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Used to backdate their enrolment date, so "time at school" and
+                    payment history show correctly from day one.
+                  </p>
+                </div>
+                <div className="flex items-start gap-3">
+                  <Checkbox
+                    id="paid-consistently"
+                    checked={paidConsistently}
+                    onCheckedChange={(v) => setPaidConsistently(Boolean(v))}
+                    className="mt-0.5"
+                  />
+                  <div className="grid gap-1">
+                    <Label htmlFor="paid-consistently" className="text-xs font-medium cursor-pointer">
+                      Paid the full monthly fee consistently for all {monthsAtSchool} month{monthsAtSchool !== 1 ? "s" : ""}
+                    </Label>
+                    <p className="text-[11px] text-muted-foreground">
+                      This backfills their real payment history into Accounts &amp; Payments
+                      — one record per past month, clearly labeled "Historical" so it's
+                      distinguishable from live payments. Uncheck if their history was
+                      irregular; you can add specific past months manually later from the
+                      Payments page instead.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 p-3">
+                  <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-amber-800 dark:text-amber-300">
+                    The backfill above only covers <strong>past</strong> months. If this
+                    student still owes money for the <strong>current</strong> month, use
+                    the Admission Payment section below as normal — it always represents
+                    what's due right now, exactly like a brand new admission.
+                  </p>
+                </div>
+              </div>
+            )}
+          </section>
+
           {/* Student Details */}
           <section className="rounded-2xl border bg-card p-6 space-y-5">
             <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
               <UserPlus className="h-4 w-4" /> Student Details
             </div>
-
             <div className="grid gap-4 md:grid-cols-2">
               <div className="grid gap-2">
                 <Label>Full Name <span className="text-destructive">*</span></Label>
@@ -208,7 +370,7 @@ function AdmissionsPage() {
                 </Select>
               </div>
               <div className="grid gap-2">
-                <Label>Starting Level <span className="text-destructive">*</span></Label>
+                <Label>{isExisting ? "Current Level" : "Starting Level"} <span className="text-destructive">*</span></Label>
                 <Select value={level} onValueChange={setLevel}>
                   <SelectTrigger> <SelectValue /> </SelectTrigger>
                   <SelectContent>
@@ -224,8 +386,15 @@ function AdmissionsPage() {
           {/* Payment Section */}
           <section className="rounded-2xl border bg-card p-6 space-y-5">
             <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-              <Receipt className="h-4 w-4" /> Admission Payment
+              <Receipt className="h-4 w-4" />
+              {isExisting ? "Current Outstanding Payment" : "Admission Payment"}
             </div>
+            {isExisting && (
+              <p className="text-xs text-muted-foreground -mt-3">
+                If this student still owes money for the current month(s), record it here —
+                this is separate from and in addition to their backfilled historical payments above.
+              </p>
+            )}
 
             {/* Registration fee checkbox */}
             <div className="flex items-start gap-3 rounded-lg border bg-muted/40 p-4">
@@ -240,15 +409,17 @@ function AdmissionsPage() {
                   Include one-time registration fee — {formatUGX(REGISTRATION_FEE)}
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  This fee is charged once at admission and does not recur. Uncheck only if it was
-                  already paid previously or is being waived.
+                  This fee is charged once at admission and does not recur.
+                  {isExisting
+                    ? " Left unchecked by default for existing students since it was likely already paid before this system existed — check it only if it genuinely wasn't."
+                    : " Uncheck only if it was already paid previously or is being waived."}
                 </p>
               </div>
             </div>
 
             {/* Number of Months Selector */}
             <div className="grid gap-2">
-              <Label>Number of Months Paid For</Label>
+              <Label>Number of Months {isExisting ? "Being Paid For Now" : "Paid For"}</Label>
               <Select value={String(numMonths)} onValueChange={(v) => setNumMonths(parseInt(v))}>
                 <SelectTrigger> <SelectValue /> </SelectTrigger>
                 <SelectContent>
@@ -258,7 +429,7 @@ function AdmissionsPage() {
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Select how many months of tuition the student is paying for at admission.
+                Select how many months of tuition the student is paying for right now.
               </p>
             </div>
 
@@ -274,7 +445,7 @@ function AdmissionsPage() {
                 placeholder={`0 — max ${formatUGX(totalDue)}`}
               />
               <p className="text-xs text-muted-foreground">
-                Enter how much the student paid at admission. Leave as 0 if no payment was made today.
+                Enter how much the student paid today. Leave as 0 if no payment was made today.
               </p>
             </div>
 
@@ -303,7 +474,7 @@ function AdmissionsPage() {
             </Button>
             <Button onClick={submit} disabled={submitting}>
               {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Admit Student
+              {isExisting ? "Add Existing Student" : "Admit Student"}
             </Button>
           </div>
         </div>
@@ -313,14 +484,31 @@ function AdmissionsPage() {
           <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
             <Receipt className="h-4 w-4" /> Fee Summary
           </div>
-
+          {isExisting && (
+            <div className="rounded-lg bg-primary/5 border border-primary/20 p-3 text-xs space-y-1">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Enrolment type</span>
+                <Badge variant="outline" className="text-[10px]">Existing Student</Badge>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Backdated tenure</span>
+                <span className="font-medium">{monthsAtSchool} month{monthsAtSchool !== 1 ? "s" : ""}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Historical records</span>
+                <span className="font-medium">
+                  {paidConsistently ? `${monthsAtSchool} to be created` : "None (manual entry)"}
+                </span>
+              </div>
+            </div>
+          )}
           <div className="space-y-3 text-sm">
             <Row label={`${COURSES[course].label} — ${numMonths} month${numMonths > 1 ? "s" : ""}`} value={formatUGX(tuitionFee)} />
             {includeRegFee && (
               <Row label="Registration fee (one-time)" value={formatUGX(REGISTRATION_FEE)} muted />
             )}
             <Separator />
-            <Row label="Total Due" value={formatUGX(totalDue)} bold />
+            <Row label="Total Due Now" value={formatUGX(totalDue)} bold />
             {paid > 0 && (
               <>
                 <Row label="Paid Today" value={formatUGX(paid)} positive />
@@ -335,8 +523,6 @@ function AdmissionsPage() {
               </>
             )}
           </div>
-
-          {/* Payment status badge */}
           <div className="pt-1">
             {paid === 0 || amountPaid === "" ? (
               <Badge variant="outline" className="text-xs">No payment recorded yet</Badge>
@@ -348,11 +534,10 @@ function AdmissionsPage() {
               </Badge>
             )}
           </div>
-
           <Separator />
-
           <p className="text-xs text-muted-foreground leading-relaxed">
             The balance and payment duration recorded here will appear on the student's account in the Students panel.
+            {isExisting && " Historical months (if enabled) will appear in Payments & Accounts tagged as \"Historical\"."}
           </p>
         </aside>
       </div>

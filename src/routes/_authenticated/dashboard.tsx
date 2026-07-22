@@ -7,8 +7,7 @@ import {
   Pencil, Trash2
 } from "lucide-react";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
-  PieChart, Pie, Cell, AreaChart, Area
+  PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from "recharts";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
@@ -60,17 +59,27 @@ function Dashboard() {
       setLoading(true);
       
       const { data: students } = await supabase.from("students").select("id, status, course, balance");
+      
       const totalStudents = students?.length ?? 0;
-      const activeStudents = students?.filter(s => s.status === "active").length ?? 0;
+      
+      const activeStudents = students?.filter(s => s.status === "active" || s.status === "promoted").length ?? 0;
       const graduated = students?.filter(s => s.status === "graduated").length ?? 0;
-      const feeBalances = students?.reduce((sum, s) => sum + (Number(s.balance) || 0), 0) ?? 0;
-      const activeCourses = new Set(students?.filter(s => s.status === "active").map(s => s.course)).size;
+      
+      const feeBalances = students
+        ?.filter(s => s.status === "active" || s.status === "promoted")
+        .reduce((sum, s) => sum + (Number(s.balance) || 0), 0) ?? 0;
+        
+      const activeCourses = new Set(
+        students?.filter(s => s.status === "active" || s.status === "promoted").map(s => s.course)
+      ).size;
 
-      const courseCounts = students?.filter(s => s.status === "active").reduce((acc: Record<string, number>, s) => {
-        const course = s.course || "Unknown";
-        acc[course] = (acc[course] || 0) + 1;
-        return acc;
-      }, {} as Record<string, number>) ?? {};
+      const courseCounts = students
+        ?.filter(s => s.status === "active" || s.status === "promoted")
+        .reduce((acc: Record<string, number>, s) => {
+          const course = s.course || "Unknown";
+          acc[course] = (acc[course] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>) ?? {};
       
       const distributionData = Object.entries(courseCounts).map(([name, value]) => ({ name, value }));
       setCourseDistribution(distributionData);
@@ -148,14 +157,14 @@ function Dashboard() {
       setEvents(eventsData || []);
 
       const newStats: Stat[] = [
-        { title: "Total Students", value: totalStudents.toString(), icon: Users, trend: { dir: "up", value: `${activeStudents}`, label: "active now" }, tint: "bg-info/10 text-info", link: "/students" },
-        { title: "Active Students", value: activeStudents.toString(), icon: UserCheck, trend: { dir: "up", value: `${totalStudents > 0 ? ((activeStudents/totalStudents)*100).toFixed(0) : 0}%`, label: "of total" }, tint: "bg-success/10 text-success", link: "/students" },
-        { title: "Graduated", value: graduated.toString(), icon: GraduationCap, trend: { dir: "up", value: "Alumni", label: "completed" }, tint: "bg-accent text-primary", link: "/graduates" },
-        { title: "Total Income", value: formatUGX(totalIncome), icon: DollarSign, trend: incomeTrend, tint: "bg-success/10 text-success", link: "/accounts" },
-        { title: "Total Expenses", value: formatUGX(totalExpenses), icon: CreditCard, trend: expenseTrend, tint: "bg-destructive/10 text-destructive", link: "/accounts" },
-        { title: "Net Profit", value: formatUGX(netProfit), icon: TrendingUp, trend: { dir: netProfit >= 0 ? "up" : "down", value: netProfit >= 0 ? "Profit" : "Loss", label: "all time" }, tint: netProfit >= 0 ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive", link: "/accounts" },
-        { title: "Fee Balances", value: formatUGX(feeBalances), icon: AlertTriangle, trend: { dir: "down", value: "Outstanding", label: "unpaid fees" }, tint: "bg-warning/15 text-warning-foreground", link: "/payments" },
-        { title: "Courses Active", value: activeCourses.toString(), icon: BookOpen, trend: { dir: "up", value: "Programs", label: "running" }, tint: "bg-accent text-primary", link: "/students" },
+        { title: "Total Students", value: totalStudents.toString(), icon: Users, trend: { dir: "up", value: `${activeStudents}`, label: "active now" }, tint: "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400", link: "/students" },
+        { title: "Active Students", value: activeStudents.toString(), icon: UserCheck, trend: { dir: "up", value: `${totalStudents > 0 ? ((activeStudents/totalStudents)*100).toFixed(0) : 0}%`, label: "of total" }, tint: "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400", link: "/students" },
+        { title: "Graduated", value: graduated.toString(), icon: GraduationCap, trend: { dir: "up", value: "Alumni", label: "completed" }, tint: "bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-400", link: "/students" },
+        { title: "Total Income", value: formatUGX(totalIncome), icon: DollarSign, trend: incomeTrend, tint: "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400", link: "/accounts" },
+        { title: "Total Expenses", value: formatUGX(totalExpenses), icon: CreditCard, trend: expenseTrend, tint: "bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400", link: "/accounts" },
+        { title: "Net Profit", value: formatUGX(netProfit), icon: TrendingUp, trend: { dir: netProfit >= 0 ? "up" : "down", value: netProfit >= 0 ? "Profit" : "Loss", label: "all time" }, tint: netProfit >= 0 ? "bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400" : "bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400", link: "/accounts" },
+        { title: "Fee Balances", value: formatUGX(feeBalances), icon: AlertTriangle, trend: { dir: "down", value: "Outstanding", label: "unpaid fees" }, tint: "bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400", link: "/payments" },
+        { title: "Courses Active", value: activeCourses.toString(), icon: BookOpen, trend: { dir: "up", value: "Programs", label: "running" }, tint: "bg-cyan-100 text-cyan-600 dark:bg-cyan-900/30 dark:text-cyan-400", link: "/students" },
       ];
 
       setStats(newStats);
@@ -232,7 +241,6 @@ function Dashboard() {
     setEvents(eventsData || []);
   };
 
-  // Custom Tooltip for Bar Chart
   const CustomBarTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       return (
@@ -251,7 +259,6 @@ function Dashboard() {
     return null;
   };
 
-  // Custom Tooltip for Pie Chart
   const CustomPieTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       return (
@@ -384,7 +391,7 @@ function Dashboard() {
 
       {/* Live Charts */}
       <div className="grid gap-5 lg:grid-cols-2">
-        {/* Revenue Overview Bar Chart - PROFESSIONAL DESIGN */}
+        {/* Revenue Overview */}
         <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-accent">
           <div className="mb-6">
             <h2 className="font-bold text-xl flex items-center gap-2">
@@ -458,7 +465,7 @@ function Dashboard() {
           </div>
         </div>
 
-        {/* Course Distribution Pie Chart - PROFESSIONAL DESIGN */}
+        {/* Course Distribution */}
         <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-accent">
           <div className="mb-6">
             <h2 className="font-bold text-xl flex items-center gap-2">
@@ -518,24 +525,24 @@ function Dashboard() {
   );
 }
 
-// Stat Card Component
+// ✅ Stat Card Component — WITH SUPER POWERFUL HOVER EFFECTS
 function StatCard({ stat, onClick }: { stat: Stat; onClick: () => void }) {
   const Icon = stat.icon;
   const TrendIcon = stat.trend.dir === "up" ? ArrowUp : ArrowDown;
   return (
     <div 
       onClick={onClick}
-      className="group stat-card-premium rounded-2xl bg-card border p-6 cursor-pointer transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-accent"
+      className="group rounded-2xl bg-card border-2 border-transparent p-6 cursor-pointer transition-all duration-500 ease-out hover:shadow-2xl hover:-translate-y-2 hover:bg-primary/5 hover:border-primary hover:scale-[1.02] active:scale-[0.98]"
     >
       <div className="flex items-start justify-between">
         <p className="text-sm text-muted-foreground font-medium">{stat.title}</p>
-        <div className={cn("h-10 w-10 rounded-xl flex items-center justify-center transition-transform duration-300 group-hover:scale-110", stat.tint)}>
-          <Icon className="h-5 w-5" />
+        <div className={cn("h-12 w-12 rounded-xl flex items-center justify-center transition-all duration-500 ease-out group-hover:scale-125 group-hover:rotate-6 group-hover:shadow-lg", stat.tint)}>
+          <Icon className="h-6 w-6" />
         </div>
       </div>
       <p className="mt-4 text-2xl font-bold tracking-tight">{stat.value}</p>
       <div className="mt-4 flex items-center gap-1.5 text-xs">
-        <span className={cn("inline-flex items-center gap-0.5 font-semibold", stat.trend.dir === "up" ? "text-success" : "text-destructive")}>
+        <span className={cn("inline-flex items-center gap-0.5 font-semibold transition-colors duration-300 group-hover:text-primary", stat.trend.dir === "up" ? "text-emerald-600" : "text-rose-600")}>
           <TrendIcon className="h-3 w-3" />
           {stat.trend.value}
         </span>
