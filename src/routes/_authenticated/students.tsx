@@ -30,6 +30,7 @@ import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import * as XLSX from "xlsx"; // ✅ Professional Excel Export
 
 export const Route = createFileRoute("/_authenticated/students")({
   validateSearch: (search) => ({
@@ -173,7 +174,7 @@ function NextPaymentInfo({ student }: { student: Student }) {
   );
 }
 
-function formatMonthYear(my: string) {
+function formatMonthLabel(my: string) {
   if (!my) return "—";
   const [y, m] = my.split("-");
   return new Date(Number(y), Number(m) - 1).toLocaleDateString("en-UG", {
@@ -192,7 +193,11 @@ function StudentsPage() {
   const [levelFilter, setLevelFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   
-  // ✅ NEW: Sort State
+  // ✅ NEW: Advanced Filters
+  const [filterYear, setFilterYear] = useState<string>("all");
+  const [filterMonth, setFilterMonth] = useState<string>("all");
+  const [balanceFilter, setBalanceFilter] = useState<string>("all"); // "all" or "owing"
+  
   const [sortField, setSortField] = useState<'name' | 'reg_no' | 'balance'>('reg_no');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   
@@ -241,6 +246,26 @@ function StudentsPage() {
 
   useEffect(() => { setLevelFilter("all"); }, [courseFilter]);
 
+  // ✅ Derive available years and months from student data
+  const availableYears = useMemo(() => {
+    const years = new Set<string>();
+    students.forEach(s => {
+      const date = new Date(s.created_at);
+      years.add(String(date.getFullYear()));
+    });
+    return Array.from(years).sort().reverse();
+  }, [students]);
+
+  const availableMonths = useMemo(() => {
+    const months = new Set<string>();
+    students.forEach(s => {
+      const date = new Date(s.created_at);
+      const monthStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      months.add(monthStr);
+    });
+    return Array.from(months).sort().reverse();
+  }, [students]);
+
   const overdueStudents = useMemo(() =>
     students.filter(s => {
       if (s.status === "graduated") return false;
@@ -280,14 +305,23 @@ function StudentsPage() {
     }), [students]
   );
 
-  // ✅ UPDATED: Filtering AND Sorting Logic
+  // ✅ UPDATED: Filtering with Year, Month, and Balance logic
   const filtered = useMemo(() => {
     let result = students.filter(s => {
       const matchQuery = s.name.toLowerCase().includes(query.toLowerCase()) || s.reg_no.toLowerCase().includes(query.toLowerCase());
       const matchCourse = courseFilter === "all" || s.course === courseFilter;
       const matchLevel = levelFilter === "all" || s.level === levelFilter;
       const matchStatus = statusFilter === "all" || s.status === statusFilter;
-      return matchQuery && matchCourse && matchLevel && matchStatus;
+      
+      const sDate = new Date(s.created_at);
+      const sYear = String(sDate.getFullYear());
+      const sMonth = `${sYear}-${String(sDate.getMonth() + 1).padStart(2, '0')}`;
+      
+      const matchYear = filterYear === "all" || sYear === filterYear;
+      const matchMonth = filterMonth === "all" || sMonth === filterMonth;
+      const matchBalance = balanceFilter === "all" || (balanceFilter === "owing" && s.balance > 0);
+
+      return matchQuery && matchCourse && matchLevel && matchStatus && matchYear && matchMonth && matchBalance;
     });
 
     return result.sort((a, b) => {
@@ -309,7 +343,7 @@ function StudentsPage() {
       if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [students, query, courseFilter, levelFilter, statusFilter, sortField, sortOrder]);
+  }, [students, query, courseFilter, levelFilter, statusFilter, filterYear, filterMonth, balanceFilter, sortField, sortOrder]);
 
   const toggleSelectAll = () => {
     if (selectedIds.size === filtered.length && filtered.length > 0) {
@@ -384,11 +418,11 @@ function StudentsPage() {
   const closeDetails = () => { setViewing(null); setViewingPayments([]); };
   const lifetimeTotal = useMemo(() => viewingPayments.reduce((sum, p) => sum + (p.amount_paid ?? 0), 0), [viewingPayments]);
 
-  // ✅ NEW: CSV Export Function
-  const exportCSV = () => {
-    const headers = ["Reg No", "Name", "Course", "Level", "Status", "Balance (UGX)", "Next Payment Date"];
+  // ✅ NEW: Professional Excel (XLSX) Export Function
+  const exportXLSX = () => {
+    if (filtered.length === 0) return toast.error("No students to export");
     
-    const rows = filtered.map(s => {
+    const data = filtered.map(s => {
       let nextDueStr = "Awaiting First Payment";
       let nextDue: Date | null = null;
       if (s.paid_until) nextDue = new Date(s.paid_until);
@@ -411,27 +445,23 @@ function StudentsPage() {
         else nextDueStr = `${days}d left - Due ${formattedDate}`;
       }
 
-      return [
-        `"${s.reg_no}"`,
-        `"${s.name.replace(/"/g, '""')}"`,
-        `"${COURSES[s.course]?.label || s.course}"`,
-        `"${s.level}"`,
-        `"${s.status}"`,
-        s.balance,
-        `"${nextDueStr}"`
-      ].join(",");
+      return {
+        "Reg No": s.reg_no,
+        "Name": s.name,
+        "Course": COURSES[s.course]?.label || s.course,
+        "Level": s.level,
+        "Status": s.status.charAt(0).toUpperCase() + s.status.slice(1),
+        "Balance (UGX)": s.balance,
+        "Next Payment Date": nextDueStr,
+        "Admission Date": new Date(s.created_at).toLocaleDateString('en-GB')
+      };
     });
 
-    const csvContent = [headers.join(","), ...rows].join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute("download", `students_roster_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast.success("Student roster exported to CSV successfully!");
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Students");
+    XLSX.writeFile(wb, `Students_Roster_${new Date().toISOString().slice(0,10)}.xlsx`);
+    toast.success("Student roster exported to Excel successfully!");
   };
 
   return (
@@ -440,7 +470,6 @@ function StudentsPage() {
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold tracking-tight">Students</h1>
-            {/* ✅ MINIMIZED: Bare icon with tiny count dot and tooltip */}
             {overdueStudents.length > 0 && (
               <button 
                 onClick={() => navigate({ to: "/payments" })}
@@ -462,8 +491,8 @@ function StudentsPage() {
               <Trash2 className="h-4 w-4 mr-2" /> Delete Selected ({selectedIds.size})
             </Button>
           )}
-          <Button variant="outline" onClick={exportCSV}>
-            <Download className="h-4 w-4 mr-1" /> Export CSV
+          <Button variant="outline" onClick={exportXLSX}>
+            <Download className="h-4 w-4 mr-1" /> Export Excel
           </Button>
           <Button onClick={() => navigate({ to: "/admissions" })}>
             <Plus className="h-4 w-4 mr-1" /> Add Student
@@ -478,7 +507,6 @@ function StudentsPage() {
             <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search name or reg no..." className="pl-9" />
           </div>
           
-          {/* ✅ NEW: Sort Dropdown + Asc/Desc Toggle */}
           <div className="flex items-center gap-1 border rounded-md bg-background px-2 py-1.5">
             <Select value={sortField} onValueChange={(v: any) => setSortField(v)}>
               <SelectTrigger className="w-[110px] h-7 border-0 shadow-none focus:ring-0 p-0 text-xs font-medium">
@@ -495,29 +523,39 @@ function StudentsPage() {
             </Button>
           </div>
 
+          {/* ✅ NEW: Advanced Filters */}
+          <Select value={filterYear} onValueChange={setFilterYear}>
+            <SelectTrigger className="w-[120px]"> <SelectValue placeholder="Year" /> </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Years</SelectItem>
+              {availableYears.map(y => <SelectItem key={y} value={y}>{y}</SelectItem>)}
+            </SelectContent>
+          </Select>
+
+          <Select value={filterMonth} onValueChange={setFilterMonth}>
+            <SelectTrigger className="w-[160px]"> <SelectValue placeholder="Month" /> </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Months</SelectItem>
+              {availableMonths.map(m => <SelectItem key={m} value={m}>{formatMonthLabel(m)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+
+          <Select value={balanceFilter} onValueChange={setBalanceFilter}>
+            <SelectTrigger className="w-[140px]"> <SelectValue placeholder="Balance" /> </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Balances</SelectItem>
+              <SelectItem value="owing">Owing Only</SelectItem>
+            </SelectContent>
+          </Select>
+
           <Select value={courseFilter} onValueChange={setCourseFilter}>
-            <SelectTrigger className="w-[180px]"> <SelectValue placeholder="All Courses" /> </SelectTrigger>
+            <SelectTrigger className="w-[160px]"> <SelectValue placeholder="Course" /> </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Courses</SelectItem>
               {(Object.keys(COURSES) as CourseKey[]).map(k => (<SelectItem key={k} value={k}>{COURSES[k].label}</SelectItem>))}
             </SelectContent>
           </Select>
-          <Select value={levelFilter} onValueChange={setLevelFilter}>
-            <SelectTrigger className="w-[160px]"> <SelectValue placeholder="All Levels" /> </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Levels</SelectItem>
-              {availableLevels.map(l => (<SelectItem key={l} value={l}>{l}</SelectItem>))}
-            </SelectContent>
-          </Select>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-[140px]"> <SelectValue placeholder="All Status" /> </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="promoted">Promoted</SelectItem>
-              <SelectItem value="graduated">Graduated</SelectItem>
-            </SelectContent>
-          </Select>
+          
           <span className="text-sm text-muted-foreground ml-auto">
             {filtered.length} student{filtered.length !== 1 ? "s" : ""}
           </span>
@@ -592,7 +630,6 @@ function StudentsPage() {
                     <TableCell className={s.balance > 0 ? "text-destructive font-medium" : ""}>{formatUGX(s.balance)}</TableCell>
                     <TableCell> <NextPaymentInfo student={s} /> </TableCell>
                     <TableCell className="text-right">
-                      {/* ✅ NEW: Collapsed Actions Dropdown (Kebab Menu) */}
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button size="icon" variant="ghost" className="h-8 w-8">
@@ -665,7 +702,7 @@ function StudentsPage() {
                     {viewingPayments.map(p => (
                       <div key={p.id} className="flex items-center justify-between text-xs border-b pb-2 gap-2">
                         <div className="flex flex-col">
-                          <span className="font-medium">{formatMonthYear(p.month_year)}</span>
+                          <span className="font-medium">{formatMonthLabel(p.month_year)}</span>
                           <span className="text-muted-foreground text-[10px]">
                             {p.payment_date} · {p.months_covered ?? 1} mo{(p.months_covered ?? 1) > 1 ? "s" : ""}
                             {p.note?.toLowerCase().includes("backfilled") ? " · historical" : ""}

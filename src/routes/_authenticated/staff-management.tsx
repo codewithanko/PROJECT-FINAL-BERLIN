@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState, useCallback } from "react";
 import {
-  Plus, Check, X, UserPlus, DollarSign, ClipboardList,
+  Plus, Check, X, UserPlus, DollarSign, ClipboardList, Download, Calendar,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { formatUGX } from "@/lib/courses";
+import * as XLSX from "xlsx";
 
 export const Route = createFileRoute("/_authenticated/staff-management")({
   head: () => ({ meta: [{ title: "Staff Management – Sandstone School" }] }),
@@ -38,6 +39,8 @@ type StaffMember = {
   role: string;
   pay_cycle: "weekly" | "monthly";
   base_amount: number;
+  cycle_amount: number | null;
+  employment_start_date: string | null;
   phone: string | null;
   notes: string | null;
   is_active: boolean;
@@ -50,7 +53,7 @@ type PayrollRow = StaffMember & {
   paymentId?: string;
 };
 
-const ROLES = ["Teacher", "Senior Teacher", "Head Teacher", "Administrator", "Accountant", "IT Officer", "Receptionist", "Support Staff", "Manager"];
+const ROLES = ["Teacher", "Accountant", "Receptionist", "Janitor", "Other"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 const currentYear = new Date().getFullYear();
@@ -59,6 +62,7 @@ const currentMonth = new Date().getMonth() + 1;
 
 function StaffManagementPage() {
   const [recruitOpen, setRecruitOpen] = useState(false);
+  const [staffDetailsOpen, setStaffDetailsOpen] = useState<StaffMember | null>(null);
 
   return (
     <div className="space-y-6">
@@ -83,8 +87,8 @@ function StaffManagementPage() {
         </TabsList>
 
         <TabsContent value="payroll" className="mt-6 space-y-6">
-          <PayrollSection payCycle="weekly" />
-          <PayrollSection payCycle="monthly" />
+          <PayrollSection payCycle="weekly" onStaffClick={setStaffDetailsOpen} />
+          <PayrollSection payCycle="monthly" onStaffClick={setStaffDetailsOpen} />
         </TabsContent>
 
         <TabsContent value="attendance" className="mt-6">
@@ -93,11 +97,12 @@ function StaffManagementPage() {
       </Tabs>
 
       {recruitOpen && <RecruitDialog onClose={() => setRecruitOpen(false)} onSaved={() => { setRecruitOpen(false); window.location.reload(); }} />}
+      {staffDetailsOpen && <StaffDetailsDialog staff={staffDetailsOpen} onClose={() => setStaffDetailsOpen(null)} />}
     </div>
   );
 }
 
-function PayrollSection({ payCycle }: { payCycle: "weekly" | "monthly" }) {
+function PayrollSection({ payCycle, onStaffClick }: { payCycle: "weekly" | "monthly"; onStaffClick: (staff: StaffMember) => void }) {
   const isWeekly = payCycle === "weekly";
   const [year, setYear] = useState(currentYear);
   const [period, setPeriod] = useState(isWeekly ? currentWeek : currentMonth);
@@ -129,7 +134,7 @@ function PayrollSection({ payCycle }: { payCycle: "weekly" | "monthly" }) {
         return {
           ...s,
           base_amount: s.base_amount ?? 0,
-          net_pay: payment?.net_pay ?? s.base_amount ?? 0,
+          net_pay: payment?.net_pay ?? s.cycle_amount ?? s.base_amount ?? 0,
           deduction_reason: "", 
           approved: !!payment,
           paymentId: payment?.id,
@@ -150,7 +155,7 @@ function PayrollSection({ payCycle }: { payCycle: "weekly" | "monthly" }) {
     const staff = rows.find(r => r.id === staffId);
     if (!staff) return;
     
-    const deduction = Math.max(0, staff.base_amount - netPay);
+    const deduction = Math.max(0, (staff.cycle_amount || staff.base_amount) - netPay);
 
     const { error } = await supabase
       .from("staff_payroll_payments")
@@ -166,18 +171,26 @@ function PayrollSection({ payCycle }: { payCycle: "weekly" | "monthly" }) {
     
     if (error) { toast.error(error.message); return; }
     setRows(prev => prev.map(r => r.id === staffId ? { ...r, net_pay: netPay, deduction_reason: reason } : r));
-    toast.success("Net pay updated");
+    toast.success("Net pay updated (pending approval)");
   };
 
   const toggleApprove = async (row: PayrollRow) => {
     if (row.approved) {
       if (row.paymentId) {
         await supabase.from("staff_payroll_payments").delete().eq("id", row.paymentId);
+        
+        await supabase
+          .from("transactions")
+          .delete()
+          .eq("type", "expense")
+          .eq("amount", row.net_pay)
+          .like("description", `%Payroll - ${row.full_name}%`)
+          .like("description", `%${periodLabel}%`);
       }
       setRows(prev => prev.map(r => r.id === row.id ? { ...r, approved: false, paymentId: undefined } : r));
-      toast.success("Payment unapproved");
+      toast.success("Payment unapproved and expense removed");
     } else {
-      const deduction = Math.max(0, row.base_amount - row.net_pay);
+      const deduction = Math.max(0, (row.cycle_amount || row.base_amount) - row.net_pay);
       
       const { data: payment, error: pe } = await supabase
         .from("staff_payroll_payments")
@@ -203,7 +216,7 @@ function PayrollSection({ payCycle }: { payCycle: "weekly" | "monthly" }) {
       });
 
       setRows(prev => prev.map(r => r.id === row.id ? { ...r, approved: true, paymentId: payment.id } : r));
-      toast.success(`Payment approved for ${row.full_name}`);
+      toast.success(`Payment approved and expense recorded for ${row.full_name}`);
     }
   };
 
@@ -218,6 +231,30 @@ function PayrollSection({ payCycle }: { payCycle: "weekly" | "monthly" }) {
   const handleFinalize = () => {
     setPeriod(p => isWeekly ? Math.min(p + 1, 52) : p === 12 ? 1 : p + 1);
     toast.success(`Moved to next ${isWeekly ? "week" : "month"}`);
+  };
+
+  const handleExport = () => {
+    if (rows.length === 0) {
+      toast.error("No data to export");
+      return;
+    }
+
+    const data = rows.map(row => ({
+      "Staff No": row.staff_no,
+      "Name": row.full_name,
+      "Role": row.role,
+      "Base Amount": row.base_amount,
+      "Cycle Amount": row.cycle_amount || row.base_amount,
+      "Net Pay": row.net_pay,
+      "Deduction Reason": row.deduction_reason || "",
+      "Status": row.approved ? "Paid" : "Pending"
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Payroll");
+    XLSX.writeFile(wb, `Payroll_${isWeekly ? "Weekly" : "Monthly"}_${periodLabel}.xlsx`);
+    toast.success("Payroll exported to Excel!");
   };
 
   const headerClass = isWeekly ? "bg-primary/5 border-primary/20" : "bg-blue-500/5 border-blue-500/20";
@@ -257,6 +294,9 @@ function PayrollSection({ payCycle }: { payCycle: "weekly" | "monthly" }) {
               <Button size="sm" className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white text-xs" onClick={handleFinalize}>
                 Finalize {isWeekly ? "Week" : "Month"} →
               </Button>
+              <Button size="sm" variant="outline" className="h-8 text-xs" onClick={handleExport}>
+                <Download className="h-3 w-3 mr-1" /> Export
+              </Button>
             </div>
           </div>
         </CardHeader>
@@ -271,10 +311,11 @@ function PayrollSection({ payCycle }: { payCycle: "weekly" | "monthly" }) {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-24">Staff No</TableHead>
+                    <TableHead className="w-20">Staff No</TableHead>
                     <TableHead>Name</TableHead>
                     <TableHead>Role</TableHead>
                     <TableHead className="w-32 text-right">Base Amount</TableHead>
+                    <TableHead className="w-32 text-right">Cycle Pay</TableHead>
                     <TableHead className="w-32 text-right">Net Pay</TableHead>
                     <TableHead>Deduction Reason</TableHead>
                     <TableHead className="text-right w-32">Actions</TableHead>
@@ -288,6 +329,7 @@ function PayrollSection({ payCycle }: { payCycle: "weekly" | "monthly" }) {
                       onUpdateNetPay={updateNetPay}
                       onToggleApprove={toggleApprove}
                       onDelete={() => setDeleteId(row.id)}
+                      onNameClick={() => onStaffClick(row)}
                     />
                   ))}
                 </TableBody>
@@ -316,12 +358,13 @@ function PayrollSection({ payCycle }: { payCycle: "weekly" | "monthly" }) {
 }
 
 function PayrollRowComponent({
-  row, onUpdateNetPay, onToggleApprove, onDelete,
+  row, onUpdateNetPay, onToggleApprove, onDelete, onNameClick,
 }: {
   row: PayrollRow;
   onUpdateNetPay: (id: string, netPay: number, reason: string) => void;
   onToggleApprove: (row: PayrollRow) => void;
   onDelete: () => void;
+  onNameClick: () => void;
 }) {
   const [netPayInput, setNetPayInput] = useState(String(row.net_pay));
   const [reasonInput, setReasonInput] = useState(row.deduction_reason);
@@ -337,9 +380,14 @@ function PayrollRowComponent({
   return (
     <TableRow className={isLocked ? "bg-emerald-50/50 dark:bg-emerald-950/10" : ""}>
       <TableCell className="font-mono text-xs">{row.staff_no}</TableCell>
-      <TableCell className="font-semibold">{row.full_name}</TableCell>
+      <TableCell>
+        <button onClick={onNameClick} className="font-semibold hover:text-primary hover:underline transition-colors text-left">
+          {row.full_name}
+        </button>
+      </TableCell>
       <TableCell className="text-muted-foreground text-sm">{row.role}</TableCell>
       <TableCell className="text-right font-medium">{formatUGX(row.base_amount)}</TableCell>
+      <TableCell className="text-right font-medium text-primary">{formatUGX(row.cycle_amount || row.base_amount)}</TableCell>
       <TableCell>
         <Input
           type="number"
@@ -370,7 +418,7 @@ function PayrollRowComponent({
             className={isLocked ? "" : "bg-emerald-600 hover:bg-emerald-700 text-white"}
           >
             <Check className="h-4 w-4 mr-1" />
-            {isLocked ? "Approved" : "Approve"}
+            {isLocked ? "Paid" : "Approve"}
           </Button>
           <Button size="sm" variant="ghost" onClick={onDelete} className="text-destructive hover:text-destructive">
             <X className="h-4 w-4" />
@@ -506,8 +554,18 @@ function AttendanceSection() {
 }
 
 function RecruitDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState({ full_name: "", role: "Teacher", pay_cycle: "monthly" as const, base_amount: "", phone: "", notes: "" });
-  const [nextNo, setNextNo] = useState("STF-001");
+  const [form, setForm] = useState({ 
+    full_name: "", 
+    role: "Teacher", 
+    role_description: "", 
+    pay_cycle: "monthly" as const, 
+    base_amount: "", 
+    cycle_amount: "",
+    employment_start_date: new Date().toISOString().split("T")[0],
+    phone: "", 
+    notes: "" 
+  });
+  const [nextNo, setNextNo] = useState("S-01");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -516,32 +574,42 @@ function RecruitDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () 
       if (data?.[0]?.staff_no) {
         const match = data[0].staff_no.match(/\d+/);
         const last = match ? parseInt(match[0], 10) : 0;
-        setNextNo(`STF-${String(last + 1).padStart(3, "0")}`);
+        setNextNo(`S-${String(last + 1).padStart(2, "0")}`);
       }
     })();
   }, []);
 
   const save = async () => {
     if (!form.full_name) return toast.error("Name is required");
+    if (!form.base_amount) return toast.error("Base amount is required");
+    if (!form.cycle_amount) return toast.error("Cycle payment amount is required");
+    
     setSaving(true);
+    
+    const roleWithDesc = form.role_description 
+      ? `${form.role} - ${form.role_description}` 
+      : form.role;
+    
     const { error } = await supabase.from("staff_members").insert({ 
       staff_no: nextNo, 
       full_name: form.full_name, 
-      role: form.role, 
+      role: roleWithDesc, 
       pay_cycle: form.pay_cycle, 
-      base_amount: Number(form.base_amount) || 0, 
+      base_amount: Number(form.base_amount) || 0,
+      cycle_amount: Number(form.cycle_amount) || 0,
+      employment_start_date: form.employment_start_date || null,
       phone: form.phone || null, 
       notes: form.notes || null, 
       is_active: true 
     });
     if (error) toast.error(error.message);
-    else { toast.success("Staff recruited"); onClose(); window.location.reload(); }
+    else { toast.success("Staff recruited successfully"); onClose(); window.location.reload(); }
     setSaving(false);
   };
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Recruit New Staff</DialogTitle></DialogHeader>
         <div className="grid gap-4 py-4">
           <div className="grid grid-cols-2 gap-4">
@@ -549,17 +617,180 @@ function RecruitDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () 
             <div className="space-y-2"><Label>Full Name *</Label><Input value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} /></div>
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2"><Label>Role</Label><Select value={form.role} onValueChange={v => setForm({ ...form, role: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{ROLES.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select></div>
-            <div className="space-y-2"><Label>Pay Cycle</Label><Select value={form.pay_cycle} onValueChange={v => setForm({ ...form, pay_cycle: v as any })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="weekly">Weekly</SelectItem><SelectItem value="monthly">Monthly</SelectItem></SelectContent></Select></div>
+            <div className="space-y-2">
+              <Label>Role *</Label>
+              <Select value={form.role} onValueChange={v => setForm({ ...form, role: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {ROLES.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Role Description (optional)</Label>
+              <Input 
+                value={form.role_description} 
+                onChange={e => setForm({ ...form, role_description: e.target.value })} 
+                placeholder="e.g. Senior English Teacher..."
+              />
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2"><Label>Base Salary (UGX)</Label><Input type="number" value={form.base_amount} onChange={e => setForm({ ...form, base_amount: e.target.value })} /></div>
-            <div className="space-y-2"><Label>Phone</Label><Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
+            <div className="space-y-2">
+              <Label>Pay Cycle *</Label>
+              <Select value={form.pay_cycle} onValueChange={v => setForm({ ...form, pay_cycle: v as any })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="weekly">Weekly</SelectItem>
+                  <SelectItem value="monthly">Monthly</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Employment Start Date *</Label>
+              <Input 
+                type="date" 
+                value={form.employment_start_date} 
+                onChange={e => setForm({ ...form, employment_start_date: e.target.value })} 
+              />
+            </div>
           </div>
-          <div className="space-y-2"><Label>Notes</Label><Input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Base Amount (Total Salary) *</Label>
+              <Input 
+                type="number" 
+                value={form.base_amount} 
+                onChange={e => setForm({ ...form, base_amount: e.target.value })} 
+                placeholder="e.g. 500000"
+              />
+              <p className="text-xs text-muted-foreground">Total agreed salary amount</p>
+            </div>
+            <div className="space-y-2">
+              <Label>{form.pay_cycle === "weekly" ? "Weekly Payment" : "Monthly Payment"} Amount *</Label>
+              <Input 
+                type="number" 
+                value={form.cycle_amount} 
+                onChange={e => setForm({ ...form, cycle_amount: e.target.value })} 
+                placeholder={form.pay_cycle === "weekly" ? "e.g. 100000" : "e.g. 500000"}
+              />
+              <p className="text-xs text-muted-foreground">Amount paid per {form.pay_cycle} cycle</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2"><Label>Phone</Label><Input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
+            <div className="space-y-2"><Label>Notes</Label><Input value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
+          </div>
         </div>
-        <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? "..." : "Recruit"}</Button></DialogFooter>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} disabled={saving}>{saving ? "..." : "Recruit"}</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
-} 
+}
+
+function StaffDetailsDialog({ staff, onClose }: { staff: StaffMember; onClose: () => void }) {
+  const calculateTenure = () => {
+    if (!staff.employment_start_date) return "Not recorded";
+    
+    const start = new Date(staff.employment_start_date);
+    const now = new Date();
+    let months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
+    let days = now.getDate() - start.getDate();
+    
+    if (days < 0) {
+      months -= 1;
+      const prevMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+      days += prevMonth.getDate();
+    }
+    
+    if (months < 0) return "Less than a day";
+    
+    const parts: string[] = [];
+    if (months > 0) parts.push(`${months} month${months !== 1 ? "s" : ""}`);
+    if (days > 0) parts.push(`${days} day${days !== 1 ? "s" : ""}`);
+    
+    return parts.join(", ") || "Less than a day";
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <UserPlus className="h-5 w-5 text-primary" />
+            Staff Details
+          </DialogTitle>
+        </DialogHeader>
+        
+        <div className="space-y-4 py-4">
+          {/* Header Info */}
+          <div className="rounded-xl bg-primary/5 border border-primary/20 p-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold text-primary uppercase tracking-wide">{staff.staff_no}</p>
+                <h3 className="text-xl font-bold mt-1">{staff.full_name}</h3>
+                <p className="text-sm text-muted-foreground mt-1">{staff.role}</p>
+              </div>
+              <Badge variant={staff.is_active ? "default" : "secondary"}>
+                {staff.is_active ? "Active" : "Inactive"}
+              </Badge>
+            </div>
+          </div>
+
+          {/* Salary Information */}
+          <div className="grid grid-cols-2 gap-3">
+            <Card className="p-3">
+              <p className="text-xs text-muted-foreground font-medium">Base Amount</p>
+              <p className="text-lg font-bold mt-1">{formatUGX(staff.base_amount)}</p>
+              <p className="text-xs text-muted-foreground mt-1">Total salary</p>
+            </Card>
+            <Card className="p-3 bg-primary/5 border-primary/20">
+              <p className="text-xs text-primary font-medium capitalize">{staff.pay_cycle} Payment</p>
+              <p className="text-lg font-bold text-primary mt-1">{formatUGX(staff.cycle_amount || staff.base_amount)}</p>
+              <p className="text-xs text-muted-foreground mt-1">Per {staff.pay_cycle} cycle</p>
+            </Card>
+          </div>
+
+          {/* Employment Duration */}
+          <Card className="p-4 bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800">
+            <div className="flex items-center gap-2">
+              <Calendar className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+              <div className="flex-1">
+                <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wide">Employment Duration</p>
+                <p className="text-lg font-bold mt-1">{calculateTenure()}</p>
+                {staff.employment_start_date && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Started: {new Date(staff.employment_start_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  </p>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          {/* Contact Info */}
+          {staff.phone && (
+            <div className="rounded-lg bg-muted/50 p-3">
+              <p className="text-xs text-muted-foreground font-medium">Phone</p>
+              <p className="text-sm font-semibold mt-1">{staff.phone}</p>
+            </div>
+          )}
+
+          {/* Notes */}
+          {staff.notes && (
+            <div className="rounded-lg bg-muted/50 p-3">
+              <p className="text-xs text-muted-foreground font-medium">Notes</p>
+              <p className="text-sm mt-1">{staff.notes}</p>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

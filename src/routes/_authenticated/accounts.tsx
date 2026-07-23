@@ -24,6 +24,7 @@ import {
 import { formatUGX } from "@/lib/courses";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import * as XLSX from "xlsx"; // ✅ Professional Excel Export
 
 export const Route = createFileRoute("/_authenticated/accounts")({
   head: () => ({ meta: [{ title: "Accounts — Sandstone School" }] }),
@@ -92,7 +93,6 @@ function AccountsPage() {
   
   const [plannerWeek, setPlannerWeek] = useState(getWeekLabel());
 
-  // ✅ NEW: Stats Month Filter
   const [statsMonthFilter, setStatsMonthFilter] = useState<string>("all");
 
   const fetchTransactions = useCallback(async () => {
@@ -157,7 +157,6 @@ function AccountsPage() {
     return Array.from(cats).sort();
   }, [transactions]);
 
-  // ✅ NEW: Calculate totals for the selected stats month
   const monthlyStatsTotals = useMemo(() => {
     if (statsMonthFilter === "all") return null;
     
@@ -176,13 +175,11 @@ function AccountsPage() {
     return { income, expense, net: income - expense, count };
   }, [transactions, statsMonthFilter]);
 
-  // ✅ NEW: Check if the selected stats month is a past (completed) month
   const isStatsMonthComplete = useMemo(() => {
     if (statsMonthFilter === "all") return false;
     const [year, month] = statsMonthFilter.split('-').map(Number);
     const now = new Date();
     const selectedDate = new Date(year, month - 1, 1);
-    // A month is "complete" if it's before the current month
     return selectedDate.getFullYear() < now.getFullYear() || 
            (selectedDate.getFullYear() === now.getFullYear() && selectedDate.getMonth() < now.getMonth());
   }, [statsMonthFilter]);
@@ -315,29 +312,32 @@ function AccountsPage() {
     }
   };
 
-  const exportCSV = () => {
-    const headers = ["Date", "Source/Type", "Direction", "Amount", "Note"];
-    const rows = filteredTransactions.map(t => {
+  // ✅ NEW: Professional Excel Export for All Transactions
+  const exportTransactionsExcel = () => {
+    if (filteredTransactions.length === 0) return toast.error("No transactions to export");
+    const data = filteredTransactions.map(t => {
       const descParts = t.description?.split("|").map(s => s.trim()) || [];
       const direction = descParts[0] || "—";
-      const note = descParts.slice(1).join("|").trim() || "";
-      return [t.date, t.type, direction, t.amount, note];
+      const note = descParts.slice(1).join(" | ").trim() || "—";
+      return {
+        "Date": t.date,
+        "Source/Type": t.type,
+        "Direction": direction,
+        "Amount": t.amount,
+        "Note": note
+      };
     });
-    const csvContent = [headers.join(","), ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))].join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute("download", `accounts_ledger_${new Date().toISOString().slice(0,10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast.success("Ledger exported successfully");
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Transactions");
+    XLSX.writeFile(wb, `Accounts_Ledger_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    toast.success("Ledger exported to Excel successfully!");
   };
 
-  const exportFilteredCSV = () => {
-    const headers = ["Date", "Source/Type", "Direction", "Amount (UGX)", "Note"];
-    const rows = filteredTransactions.map(t => {
+  // ✅ NEW: Professional Excel Export for Filtered Transactions
+  const exportFilteredExcel = () => {
+    if (filteredTransactions.length === 0) return toast.error("No transactions to export");
+    const data = filteredTransactions.map(t => {
       const descParts = t.description?.split("|").map(s => s.trim()) || [];
       let direction = descParts[0] || "—";
       let note = descParts.slice(1).join(" | ").trim() || "—";
@@ -346,12 +346,18 @@ function AccountsPage() {
          note = t.description || "—";
       }
       const isIn = direction.includes("In");
-      return [t.date, t.type, direction, isIn ? `+${t.amount}` : `-${t.amount}`, note];
+      return {
+        "Date": t.date,
+        "Source/Type": t.type,
+        "Direction": direction,
+        "Amount (UGX)": isIn ? `+${t.amount}` : `-${t.amount}`,
+        "Note": note
+      };
     });
-    const csvContent = [headers.join(","), ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))].join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Filtered Transactions");
+    
     let filename = "transactions";
     if (selectedSpecificMonth !== "all") {
       const [year, month] = selectedSpecificMonth.split('-');
@@ -362,38 +368,27 @@ function AccountsPage() {
     } else if (dateFrom && dateTo) {
       filename = `transactions_${dateFrom}_to_${dateTo}`;
     }
-    link.href = url;
-    link.setAttribute("download", `${filename}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast.success(`Exported ${filteredTransactions.length} transactions`);
+    
+    XLSX.writeFile(wb, `${filename}.xlsx`);
+    toast.success("Filtered transactions exported to Excel successfully!");
   };
 
-  const exportBudgetCSV = () => {
-    if (weekBudgets.length === 0) {
-      toast.info("No budget records to export for this week.");
-      return;
-    }
-    const headers = ["Week", "Budget Date", "Category", "Planned (UGX)", "Actual Spent (UGX)", "Notes"];
-    const rows = weekBudgets.map(b => [
-      b.week_label,
-      b.budget_date,
-      `"${(b.category || "").replace(/"/g, '""')}"`,
-      b.planned_amount,
-      b.actual_amount,
-      `"${(b.notes || "").replace(/"/g, '""')}"`
-    ]);
-    const csvContent = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute("download", `budget_${selectedWeek}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    toast.success("Weekly budget exported successfully!");
+  // ✅ NEW: Professional Excel Export for Weekly Budget
+  const exportBudgetExcel = () => {
+    if (weekBudgets.length === 0) return toast.error("No budget records to export for this week.");
+    const data = weekBudgets.map(b => ({
+      "Week": b.week_label,
+      "Budget Date": b.budget_date,
+      "Category": b.category,
+      "Planned (UGX)": b.planned_amount,
+      "Actual Spent (UGX)": b.actual_amount,
+      "Notes": b.notes || ""
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Weekly Budget");
+    XLSX.writeFile(wb, `Budget_${selectedWeek}.xlsx`);
+    toast.success("Weekly budget exported to Excel successfully!");
   };
 
   const addPlan = (day: string, task: string) => { 
@@ -419,10 +414,9 @@ function AccountsPage() {
           <h1 className="text-3xl font-bold tracking-tight">Accounts & Ledger</h1>
           <p className="text-sm text-muted-foreground mt-1">Track income, expenses, outstanding fees, and manage weekly budgets.</p>
         </div>
-        <Button variant="outline" onClick={exportCSV}><Download className="h-4 w-4 mr-2" /> Export CSV</Button>
+        <Button variant="outline" onClick={exportTransactionsExcel}><Download className="h-4 w-4 mr-2" /> Export Excel</Button>
       </header>
 
-      {/* ✅ NEW: Stats Month Filter + Month Complete Indicator */}
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -438,7 +432,6 @@ function AccountsPage() {
               </SelectContent>
             </Select>
           </div>
-          {/* ✅ Month Complete Badge */}
           {isStatsMonthComplete && statsMonthFilter !== "all" && (
             <div className="flex items-center gap-2 rounded-full bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 px-3 py-1.5">
               <CheckCircle2 className="h-4 w-4 text-emerald-600" />
@@ -450,7 +443,6 @@ function AccountsPage() {
         </div>
       </Card>
 
-      {/* ✅ ROW 1: Grand Total (All Time) - Always visible */}
       <div>
         <div className="flex items-center gap-2 mb-2">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Grand Total (All Time)</h2>
@@ -463,7 +455,6 @@ function AccountsPage() {
         </div>
       </div>
 
-      {/* ✅ ROW 2: Selected Month Totals - Only visible when a specific month is selected */}
       {statsMonthFilter !== "all" && monthlyStatsTotals && (
         <div>
           <div className="flex items-center gap-2 mb-2">
@@ -603,7 +594,7 @@ function AccountsPage() {
                 </Button>
               )}
               <Badge variant="secondary" className="ml-auto">{filteredTransactions.length} transaction{filteredTransactions.length !== 1 ? 's' : ''}</Badge>
-              <Button variant="outline" size="sm" onClick={exportFilteredCSV}><Download className="h-4 w-4 mr-2" /> Export Filtered</Button>
+              <Button variant="outline" size="sm" onClick={exportFilteredExcel}><Download className="h-4 w-4 mr-2" /> Export Filtered</Button>
             </div>
 
             <Table>
@@ -674,8 +665,8 @@ function AccountsPage() {
                 <p className="text-2xl font-bold text-rose-600 mt-1">{formatUGX(weekBudgetTotals.actual)}</p>
               </Card>
               <Card className="p-4 flex items-center justify-end">
-                <Button variant="outline" onClick={exportBudgetCSV}>
-                  <Download className="h-4 w-4 mr-2" /> Export Weekly Budget CSV
+                <Button variant="outline" onClick={exportBudgetExcel}>
+                  <Download className="h-4 w-4 mr-2" /> Export Weekly Budget Excel
                 </Button>
               </Card>
             </div>
