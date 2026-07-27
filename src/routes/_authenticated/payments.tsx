@@ -87,6 +87,7 @@ function getEndMonth(startMonth: string, count: number) {
 type Student = {
   id: string; name: string; reg_no: string;
   course: string; level: string; status: string; balance: number;
+  agreed_fee?: number | null; // ✅ Added agreed_fee
 };
 
 type Payment = {
@@ -157,7 +158,6 @@ function PaymentsPage() {
       .order("date", { ascending: false });
     if (data) {
       setOtherIncome(data.map(t => {
-        // ✅ Strip "Money In | " prefix if it exists, then parse
         const cleanDesc = (t.description || "").replace(/^Money In \| /, "");
         const parts = cleanDesc.replace("Other Income: ", "").split(" | ");
         return {
@@ -248,8 +248,11 @@ function PaymentsPage() {
     };
   }, [payments, students, overdueStudents]);
 
+  // ✅ FIXED: Replaced || with ?? to prevent TypeScript error
   const getNewDue = (f: PaymentForm) => {
-    const courseFee = COURSES[f.course]?.fee ?? 0;
+    const student = students.find(s => s.id === f.student_id);
+    const courseFee = student?.agreed_fee ?? COURSES[f.course]?.fee ?? 0;
+    
     if (editing) return courseFee * f.num_months;
     if (f.current_balance > 0 && f.num_months === 1) {
       return f.current_balance;
@@ -257,8 +260,9 @@ function PaymentsPage() {
     return f.current_balance + (courseFee * f.num_months);
   };
 
+  // ✅ FIXED: Replaced || with ?? to prevent TypeScript error
   const selectStudent = (s: Student) => {
-    const courseFee = COURSES[s.course]?.fee ?? 0;
+    const courseFee = s.agreed_fee ?? COURSES[s.course]?.fee ?? 0;
     const currentBalance = s.balance > 0 ? s.balance : 0;
     let initialDue = courseFee;
     if (currentBalance > 0) initialDue = currentBalance;
@@ -279,13 +283,14 @@ function PaymentsPage() {
     setStudentSearch("");
   };
 
+  // ✅ FIXED: Replaced || with ?? to prevent TypeScript error
   const openNew = (student?: Student) => {
     setEditing(null);
     setStudentSearch("");
     setStudentCourseFilter("all");
     setStudentLevelFilter("all");
     if (student) {
-      const courseFee = COURSES[student.course]?.fee ?? 0;
+      const courseFee = student.agreed_fee ?? COURSES[student.course]?.fee ?? 0;
       const currentBalance = student.balance > 0 ? student.balance : 0;
       let initialDue = courseFee;
       if (currentBalance > 0) initialDue = currentBalance;
@@ -365,7 +370,9 @@ function PaymentsPage() {
       
       if (error) { toast.error("Failed to record: " + error.message); setSubmitting(false); return; }
 
-      const courseFee = COURSES[form.course]?.fee ?? 0;
+      // ✅ FIXED: Replaced || with ?? to prevent TypeScript error
+      const student = students.find(s => s.id === form.student_id);
+      const courseFee = student?.agreed_fee ?? COURSES[form.course]?.fee ?? 0;
       const shouldUpdatePaidUntil = paid >= courseFee;
 
       const studentUpdate: any = {
@@ -408,7 +415,6 @@ function PaymentsPage() {
     if (!otherIncomeForm.source.trim()) return toast.error("Source is required");
     if (!otherIncomeForm.amount) return toast.error("Amount is required");
     
-    // ✅ FIX: Added "Money In | " prefix so Accounts page recognizes it as income
     const desc = `Money In | Other Income: ${otherIncomeForm.source} | Method: ${otherIncomeForm.method} | Note: ${otherIncomeForm.note}`;
     
     const { error } = await supabase.from("transactions").insert({
@@ -458,7 +464,6 @@ function PaymentsPage() {
     fetchAll();
   };
 
-  // ✅ NEW: Export Filtered Payments to CSV
   const exportFilteredCSV = () => {
     const headers = ["Date", "Student", "Reg No", "Course", "Level", "Period", "Method", "Due", "Paid", "Balance", "Status", "Note"];
     const rows = filteredPayments.map(p => {
@@ -492,7 +497,6 @@ function PaymentsPage() {
     toast.success("Filtered payments exported successfully");
   };
 
-  // ✅ NEW: Export ALL Payments to CSV (Full Backup)
   const exportAllCSV = () => {
     const headers = ["Date", "Student", "Reg No", "Course", "Level", "Period", "Method", "Due", "Paid", "Balance", "Status", "Note"];
     const rows = payments.map(p => {
@@ -576,7 +580,6 @@ function PaymentsPage() {
           <TabsTrigger value="other">Other Income</TabsTrigger>
         </TabsList>
 
-        {/* ── Records Tab ── */}
         <TabsContent value="records" className="mt-4">
           <Card className="p-0 overflow-hidden">
             <div className="p-4 border-b flex flex-wrap items-center gap-3">
@@ -610,7 +613,6 @@ function PaymentsPage() {
                 </SelectContent>
               </Select>
               
-              {/* ✅ NEW: Export Buttons */}
               <div className="flex items-center gap-2 ml-auto">
                 <Button variant="outline" size="sm" onClick={exportFilteredCSV}>
                   <Download className="h-4 w-4 mr-1" /> Export Filtered
@@ -682,7 +684,6 @@ function PaymentsPage() {
           </Card>
         </TabsContent>
 
-        {/* ── Clear Debts Tab ── */}
         <TabsContent value="overdue" className="mt-4">
           <Card className="p-0 overflow-hidden">
             <div className="p-4 border-b flex flex-wrap items-center gap-3">
@@ -738,7 +739,6 @@ function PaymentsPage() {
           </Card>
         </TabsContent>
 
-        {/* ── Other Income Tab ── */}
         <TabsContent value="other" className="mt-4">
           <Card className="p-0 overflow-hidden">
             <div className="p-4 border-b flex items-center justify-between">
@@ -784,7 +784,6 @@ function PaymentsPage() {
         </TabsContent>
       </Tabs>
 
-      {/* ── Student Payment Dialog ── */}
       <Dialog open={open} onOpenChange={o => !o && setOpen(false)}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -990,7 +989,6 @@ function PaymentsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Other Income Dialog ── */}
       <Dialog open={otherIncomeOpen} onOpenChange={setOtherIncomeOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>

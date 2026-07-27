@@ -71,6 +71,7 @@ type Student = {
   paid_until: string | null;
   enrolled_date: string | null;
   created_at: string;
+  agreed_fee?: number | null; // ✅ NEW: Added agreed_fee
 };
 
 type PaymentRecord = {
@@ -379,6 +380,7 @@ function StudentsPage() {
     fetchStudents();
   };
 
+  // ✅ UPDATED: saveEdit now includes agreed_fee
   const saveEdit = async (updated: Student) => {
     const { error } = await supabase.from("students").update({
       name: updated.name,
@@ -391,6 +393,7 @@ function StudentsPage() {
       last_payment_date: updated.last_payment_date,
       paid_until: updated.paid_until,
       enrolled_date: updated.enrolled_date,
+      agreed_fee: updated.agreed_fee, // ✅ Saves the negotiated fee
     }).eq("id", updated.id);
     
     if (error) { toast.error("Update failed: " + error.message); return; }
@@ -704,11 +707,10 @@ function StudentsPage() {
                 ) : (
                   <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                     {viewingPayments.map(p => {
-                      // ✅ Calculate exact start and end dates for the payment period
                       const startDate = new Date(p.payment_date);
                       const endDate = new Date(p.payment_date);
                       const monthsCovered = p.months_covered || 1;
-                      endDate.setDate(startDate.getDate() + (monthsCovered * 30)); // Approx 30 days per month
+                      endDate.setDate(startDate.getDate() + (monthsCovered * 30));
 
                       const startStr = startDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
                       const endStr = endDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -716,7 +718,6 @@ function StudentsPage() {
                       return (
                         <div key={p.id} className="flex items-center justify-between text-xs border-b pb-2 gap-2">
                           <div className="flex flex-col">
-                            {/* ✅ Shows exact date range like "12 Aug 2026 — 12 Sep 2026" */}
                             <span className="font-medium text-primary">{startStr} — {endStr}</span>
                             <span className="text-muted-foreground text-[10px] mt-0.5">
                               {p.method} · {monthsCovered} mo{monthsCovered > 1 ? "s" : ""} covered
@@ -759,7 +760,7 @@ function StudentsPage() {
   );
 }
 
-// ✅ UPDATED: Edit Dialog with Enrollment Date and Last Payment Date Pickers
+// ✅ UPDATED: Edit Dialog with Agreed Fee Input
 function EditDialog({ student, onClose, onSave }: { student: Student | null; onClose: () => void; onSave: (s: Student) => void }) {
   const [draft, setDraft] = useState<Student | null>(null);
   useEffect(() => { setDraft(student); }, [student]);
@@ -779,6 +780,7 @@ function EditDialog({ student, onClose, onSave }: { student: Student | null; onC
 
   if (!student || !draft) return null;
   const levels = COURSES[draft.course]?.levels ?? [];
+  const standardFee = COURSES[draft.course]?.fee ?? 0;
 
   return (
     <Dialog open={!!student} onOpenChange={o => !o && onClose()}>
@@ -805,7 +807,6 @@ function EditDialog({ student, onClose, onSave }: { student: Student | null; onC
             </div>
           </div>
 
-          {/* ✅ NEW: Exact Date Controls */}
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-2">
               <Label className="flex items-center gap-1"><Calendar className="h-3.5 w-3.5" /> Enrollment Date</Label>
@@ -839,6 +840,21 @@ function EditDialog({ student, onClose, onSave }: { student: Student | null; onC
           <div className="grid gap-2">
             <Label>Days Until Next Payment (Fallback)</Label>
             <Input type="number" value={draft.payment_cycle_days ?? 30} onChange={e => setDraft({ ...draft, payment_cycle_days: Number(e.target.value) })} placeholder="e.g. 30" />
+          </div>
+
+          {/* ✅ NEW: Agreed Fee Input */}
+          <div className="grid gap-2 rounded-lg border border-dashed p-3 bg-muted/30">
+            <Label className="text-primary font-medium">Negotiated / Agreed Fee (Optional)</Label>
+            <Input 
+              type="number" 
+              value={draft.agreed_fee || ""} 
+              onChange={e => setDraft({ ...draft, agreed_fee: e.target.value ? Number(e.target.value) : null })} 
+              placeholder={`Leave blank for standard fee (${formatUGX(standardFee)})`} 
+            />
+            <p className="text-[10px] text-muted-foreground">
+              If the student pays a negotiated amount (e.g., 300,000 instead of {formatUGX(standardFee)}), enter it here. 
+              This ensures their balance calculates to 0 when they pay the agreed amount, preventing false debt.
+            </p>
           </div>
 
           <div className="rounded-lg bg-muted/50 p-3 text-sm flex items-center justify-between border border-dashed">

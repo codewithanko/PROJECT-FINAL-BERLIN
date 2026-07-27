@@ -51,6 +51,9 @@ function AdmissionsPage() {
   const [phone, setPhone] = useState("");
   const [course, setCourse] = useState<CourseKey>("english");
   const [level, setLevel] = useState<string>(COURSES.english.levels[0]);
+  
+  // ✅ NEW: Agreed Fee State
+  const [agreedFee, setAgreedFee] = useState("");
 
   // ── Enrolment type: New vs Existing (already-at-school) student ──
   const [isExisting, setIsExisting] = useState(false);
@@ -93,8 +96,9 @@ function AdmissionsPage() {
   };
 
   // ── Fee calculations ──────────────────────────────────────────────────
-  const monthlyFee = COURSES[course].fee;
-  const tuitionFee = monthlyFee * numMonths;
+  // ✅ UPDATED: Use agreed fee if provided, otherwise use standard course fee
+  const baseFee = agreedFee ? Number(agreedFee) : COURSES[course].fee;
+  const tuitionFee = baseFee * numMonths;
   const regFee = includeRegFee ? REGISTRATION_FEE : 0;
   const totalDue = tuitionFee + regFee;
   const paid = Number(amountPaid) || 0;
@@ -142,6 +146,7 @@ function AdmissionsPage() {
       payment_cycle_days: 30,
       paid_until: paidUntilStr,
       enrolled_date: enrolledDate,
+      agreed_fee: agreedFee ? Number(agreedFee) : null, // ✅ NEW: Save agreed fee
     });
 
     if (studentError) {
@@ -179,7 +184,6 @@ function AdmissionsPage() {
         note: isExisting ? "Admission payment (existing student — current dues)" : "Admission payment",
       });
 
-      // ✅ FIX: Added "Money In | " so the Accountant's page sees this as income
       await supabase.from("transactions").insert({
         type: "income",
         amount: paid,
@@ -205,8 +209,8 @@ function AdmissionsPage() {
           reg_no: regNo.trim(),
           course,
           level,
-          amount_due: monthlyFee,
-          amount_paid: monthlyFee,
+          amount_due: baseFee, // ✅ UPDATED: Use baseFee (agreed or standard)
+          amount_paid: baseFee,
           balance: 0,
           method: "cash",
           payment_date: dateStr,
@@ -216,10 +220,9 @@ function AdmissionsPage() {
           note: "Backfilled — historical payment prior to system setup",
         });
         
-        // ✅ FIX: Added "Money In | " so historical payments also show in Accounts
         transactionRows.push({
           type: "income",
-          amount: monthlyFee,
+          amount: baseFee, // ✅ UPDATED: Use baseFee
           date: dateStr,
           description: `Money In | Historical payment — ${name.trim()} (${regNo.trim()}) [${monthYear}]`,
         });
@@ -240,7 +243,8 @@ function AdmissionsPage() {
     });
 
     setSubmitting(false);
-    navigate({ to: "/students" });
+    // ✅ FIXED: Added search parameter to satisfy TanStack Router types
+    navigate({ to: "/students", search: { search: "" } });
   };
 
   return (
@@ -380,6 +384,21 @@ function AdmissionsPage() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {/* ✅ NEW: Agreed Fee Input */}
+              <div className="grid gap-2 md:col-span-2">
+                <Label>Negotiated / Agreed Fee (Optional)</Label>
+                <Input 
+                  type="number" 
+                  value={agreedFee} 
+                  onChange={e => setAgreedFee(e.target.value)} 
+                  placeholder={`Leave blank for standard fee (${formatUGX(COURSES[course].fee)})`} 
+                />
+                <p className="text-xs text-muted-foreground">
+                  If the student negotiated a different fee (e.g., 300,000 instead of {formatUGX(COURSES[course].fee)}), enter it here. 
+                  The system will use this amount for all future balance calculations so they never show false debt.
+                </p>
+              </div>
             </div>
           </section>
 
@@ -469,7 +488,8 @@ function AdmissionsPage() {
           </section>
 
           <div className="flex justify-end gap-3">
-            <Button variant="outline" onClick={() => navigate({ to: "/students" })}>
+            {/* ✅ FIXED: Added search parameter to satisfy TanStack Router types */}
+            <Button variant="outline" onClick={() => navigate({ to: "/students", search: { search: "" } })}>
               Cancel
             </Button>
             <Button onClick={submit} disabled={submitting}>
@@ -504,6 +524,11 @@ function AdmissionsPage() {
           )}
           <div className="space-y-3 text-sm">
             <Row label={`${COURSES[course].label} — ${numMonths} month${numMonths > 1 ? "s" : ""}`} value={formatUGX(tuitionFee)} />
+            {agreedFee && (
+              <div className="flex justify-between gap-4 text-xs text-primary">
+                <span>(Negotiated Fee: {formatUGX(Number(agreedFee))}/mo)</span>
+              </div>
+            )}
             {includeRegFee && (
               <Row label="Registration fee (one-time)" value={formatUGX(REGISTRATION_FEE)} muted />
             )}
