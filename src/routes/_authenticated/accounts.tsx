@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { 
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, NotebookPen, 
   Download, Loader2, CalendarDays, Target, Pencil, AlertTriangle,
-  ChevronRight, CheckCircle2
+  ChevronRight, CheckCircle2, ChevronUp, ChevronDown
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,7 +24,7 @@ import {
 import { formatUGX } from "@/lib/courses";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import * as XLSX from "xlsx"; // ✅ Professional Excel Export
+import * as XLSX from "xlsx";
 
 export const Route = createFileRoute("/_authenticated/accounts")({
   head: () => ({ meta: [{ title: "Accounts — Sandstone School" }] }),
@@ -90,10 +90,14 @@ function AccountsPage() {
 
   const [statDetailType, setStatDetailType] = useState<"income" | "expense" | "outstanding" | null>(null);
   const [modalMonthFilter, setModalMonthFilter] = useState<string>("all");
+  const [modalWeekFilter, setModalWeekFilter] = useState<string>("all"); // ✅ NEW: Modal week filter
   
   const [plannerWeek, setPlannerWeek] = useState(getWeekLabel());
-
   const [statsMonthFilter, setStatsMonthFilter] = useState<string>("all");
+  const [statsWeekFilter, setStatsWeekFilter] = useState<string>("all"); // ✅ NEW: Stats week filter
+
+  // ✅ NEW: Collapsible Table State
+  const [isTableCollapsed, setIsTableCollapsed] = useState(false);
 
   const fetchTransactions = useCallback(async () => {
     setLoading(true);
@@ -143,6 +147,16 @@ function AccountsPage() {
     return Array.from(months).sort().reverse();
   }, [transactions]);
 
+  // ✅ NEW: Available weeks for stats filtering
+  const availableWeeksForStats = useMemo(() => {
+    const weeks = new Set<string>();
+    transactions.forEach(t => {
+      const d = new Date(t.date);
+      weeks.add(getWeekLabel(d));
+    });
+    return Array.from(weeks).sort().reverse();
+  }, [transactions]);
+
   const availableYears = useMemo(() => {
     const years = new Set<string>();
     transactions.forEach(t => {
@@ -157,14 +171,18 @@ function AccountsPage() {
     return Array.from(cats).sort();
   }, [transactions]);
 
-  const monthlyStatsTotals = useMemo(() => {
-    if (statsMonthFilter === "all") return null;
+  // ✅ UPDATED: Period stats totals (handles both Week and Month filters)
+  const periodStatsTotals = useMemo(() => {
+    if (statsWeekFilter === "all" && statsMonthFilter === "all") return null;
     
     let income = 0, expense = 0, count = 0;
     for (const t of transactions) {
       const d = new Date(t.date);
       const tMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      if (tMonth !== statsMonthFilter) continue;
+      const tWeek = getWeekLabel(d);
+
+      if (statsWeekFilter !== "all" && tWeek !== statsWeekFilter) continue;
+      if (statsMonthFilter !== "all" && tMonth !== statsMonthFilter) continue;
       
       const amt = Number(t.amount);
       const isIn = t.type === "income" || t.description?.includes("Money In");
@@ -173,7 +191,7 @@ function AccountsPage() {
       count++;
     }
     return { income, expense, net: income - expense, count };
-  }, [transactions, statsMonthFilter]);
+  }, [transactions, statsWeekFilter, statsMonthFilter]);
 
   const isStatsMonthComplete = useMemo(() => {
     if (statsMonthFilter === "all") return false;
@@ -212,9 +230,8 @@ function AccountsPage() {
       if (filterType === "expense" && isIn) return false;
 
       if (filterCategory !== "all") {
-        if (t.type !== filterCategory && t.type !== "income" && t.type !== "expense") {
-           return false;
-        }
+        const matchesCategory = t.type === filterCategory || t.description?.includes(filterCategory);
+        if (!matchesCategory) return false;
       }
       
       const searchLower = searchQuery.toLowerCase();
@@ -312,7 +329,6 @@ function AccountsPage() {
     }
   };
 
-  // ✅ NEW: Professional Excel Export for All Transactions
   const exportTransactionsExcel = () => {
     if (filteredTransactions.length === 0) return toast.error("No transactions to export");
     const data = filteredTransactions.map(t => {
@@ -334,7 +350,6 @@ function AccountsPage() {
     toast.success("Ledger exported to Excel successfully!");
   };
 
-  // ✅ NEW: Professional Excel Export for Filtered Transactions
   const exportFilteredExcel = () => {
     if (filteredTransactions.length === 0) return toast.error("No transactions to export");
     const data = filteredTransactions.map(t => {
@@ -373,7 +388,6 @@ function AccountsPage() {
     toast.success("Filtered transactions exported to Excel successfully!");
   };
 
-  // ✅ NEW: Professional Excel Export for Weekly Budget
   const exportBudgetExcel = () => {
     if (weekBudgets.length === 0) return toast.error("No budget records to export for this week.");
     const data = weekBudgets.map(b => ({
@@ -417,21 +431,40 @@ function AccountsPage() {
         <Button variant="outline" onClick={exportTransactionsExcel}><Download className="h-4 w-4 mr-2" /> Export Excel</Button>
       </header>
 
+      {/* ✅ UPDATED: Stats Period with BOTH Week and Month Filters */}
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <CalendarDays className="h-5 w-5 text-primary" />
             <Label className="text-sm font-semibold whitespace-nowrap">Stats Period:</Label>
-            <Select value={statsMonthFilter} onValueChange={setStatsMonthFilter}>
-              <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
+            
+            <Select value={statsWeekFilter} onValueChange={(v) => { 
+              setStatsWeekFilter(v); 
+              if (v !== "all") setStatsMonthFilter("all"); 
+            }}>
+              <SelectTrigger className="w-[160px]"><SelectValue placeholder="Select Week" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Grand Total (All Time)</SelectItem>
+                <SelectItem value="all">All Weeks</SelectItem>
+                {availableWeeksForStats.map(w => (
+                  <SelectItem key={w} value={w}>{w}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select value={statsMonthFilter} onValueChange={(v) => { 
+              setStatsMonthFilter(v); 
+              if (v !== "all") setStatsWeekFilter("all"); 
+            }}>
+              <SelectTrigger className="w-[180px]"><SelectValue placeholder="Select Month" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Months</SelectItem>
                 {availableMonths.map(m => (
                   <SelectItem key={m} value={m}>{formatMonthLabel(m)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
+          
           {isStatsMonthComplete && statsMonthFilter !== "all" && (
             <div className="flex items-center gap-2 rounded-full bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 px-3 py-1.5">
               <CheckCircle2 className="h-4 w-4 text-emerald-600" />
@@ -455,36 +488,45 @@ function AccountsPage() {
         </div>
       </div>
 
-      {statsMonthFilter !== "all" && monthlyStatsTotals && (
+      {/* ✅ UPDATED: Dynamic Period Stats (Week or Month) */}
+      {periodStatsTotals && (
         <div>
           <div className="flex items-center gap-2 mb-2">
             <h2 className="text-sm font-semibold text-primary uppercase tracking-wide">
-              Month of {formatMonthLabel(statsMonthFilter)}
+              {statsWeekFilter !== "all" ? `Week: ${statsWeekFilter}` : `Month: ${formatMonthLabel(statsMonthFilter)}`}
             </h2>
             <Badge variant="outline" className="text-[10px]">
-              {monthlyStatsTotals.count} transaction{monthlyStatsTotals.count !== 1 ? 's' : ''}
+              {periodStatsTotals.count} transaction{periodStatsTotals.count !== 1 ? 's' : ''}
             </Badge>
           </div>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <StatCard 
-              label="Income This Month" 
-              value={monthlyStatsTotals.income} 
+              label="Income This Period" 
+              value={periodStatsTotals.income} 
               icon={TrendingUp} 
               tone="emerald" 
-              onClick={() => { setStatDetailType("income"); setModalMonthFilter(statsMonthFilter); }}
+              onClick={() => { 
+                setStatDetailType("income"); 
+                setModalWeekFilter(statsWeekFilter);
+                setModalMonthFilter(statsMonthFilter); 
+              }}
             />
             <StatCard 
-              label="Expenses This Month" 
-              value={monthlyStatsTotals.expense} 
+              label="Expenses This Period" 
+              value={periodStatsTotals.expense} 
               icon={TrendingDown} 
               tone="rose" 
-              onClick={() => { setStatDetailType("expense"); setModalMonthFilter(statsMonthFilter); }}
+              onClick={() => { 
+                setStatDetailType("expense"); 
+                setModalWeekFilter(statsWeekFilter);
+                setModalMonthFilter(statsMonthFilter); 
+              }}
             />
             <StatCard 
-              label="Net Profit This Month" 
-              value={monthlyStatsTotals.net} 
+              label="Net Profit This Period" 
+              value={periodStatsTotals.net} 
               icon={Wallet} 
-              tone={monthlyStatsTotals.net >= 0 ? "indigo" : "amber"} 
+              tone={periodStatsTotals.net >= 0 ? "indigo" : "amber"} 
               isNet 
             />
             <StatCard 
@@ -578,58 +620,74 @@ function AccountsPage() {
           <TransactionForm onAdd={addTransaction} categories={categories} />
 
           <Card className="p-0 overflow-hidden">
-            <div className="p-4 border-b bg-muted/30 flex flex-wrap items-center gap-3">
+            <div className="p-4 border-b bg-muted/30 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <CalendarDays className="h-4 w-4 text-primary" />
-                <Label className="text-sm font-semibold">Filter by Date Range:</Label>
+                <Label className="text-sm font-semibold">Financial Ledger</Label>
               </div>
-              <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-auto max-w-[150px]" placeholder="From" />
-              <span className="text-muted-foreground">to</span>
-              <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-auto max-w-[150px]" placeholder="To" />
-              <Button variant="default" size="sm" onClick={() => setDateRange("custom")} className="bg-primary text-primary-foreground">Apply Filter</Button>
-              <Button variant="outline" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); setDateRange("all"); setSelectedYear("all"); setSelectedSpecificMonth("all"); }}>Reset Filters</Button>
-              {filteredTransactions.length > 0 && (
-                <Button variant="destructive" size="sm" onClick={handleDeleteFiltered}>
-                  <Trash2 className="h-4 w-4 mr-2" /> Delete Filtered ({filteredTransactions.length})
-                </Button>
-              )}
-              <Badge variant="secondary" className="ml-auto">{filteredTransactions.length} transaction{filteredTransactions.length !== 1 ? 's' : ''}</Badge>
-              <Button variant="outline" size="sm" onClick={exportFilteredExcel}><Download className="h-4 w-4 mr-2" /> Export Filtered</Button>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setIsTableCollapsed(!isTableCollapsed)} 
+                className="h-8 text-xs"
+              >
+                {isTableCollapsed ? <ChevronDown className="h-4 w-4 mr-1" /> : <ChevronUp className="h-4 w-4 mr-1" />}
+                {isTableCollapsed ? "Expand Table" : "Collapse Table"}
+              </Button>
             </div>
+            
+            {!isTableCollapsed && (
+              <>
+                <div className="p-4 border-b bg-muted/10 flex flex-wrap items-center gap-3">
+                  <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-auto max-w-[150px]" placeholder="From" />
+                  <span className="text-muted-foreground">to</span>
+                  <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-auto max-w-[150px]" placeholder="To" />
+                  <Button variant="default" size="sm" onClick={() => setDateRange("custom")} className="bg-primary text-primary-foreground">Apply Filter</Button>
+                  <Button variant="outline" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); setDateRange("all"); setSelectedYear("all"); setSelectedSpecificMonth("all"); }}>Reset Filters</Button>
+                  {filteredTransactions.length > 0 && (
+                    <Button variant="destructive" size="sm" onClick={handleDeleteFiltered}>
+                      <Trash2 className="h-4 w-4 mr-2" /> Delete Filtered ({filteredTransactions.length})
+                    </Button>
+                  )}
+                  <Badge variant="secondary" className="ml-auto">{filteredTransactions.length} transaction{filteredTransactions.length !== 1 ? 's' : ''}</Badge>
+                  <Button variant="outline" size="sm" onClick={exportFilteredExcel}><Download className="h-4 w-4 mr-2" /> Export Filtered</Button>
+                </div>
 
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Source / Type</TableHead>
-                  <TableHead>Direction</TableHead>
-                  <TableHead>Note</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="text-right w-[120px]">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? (
-                  <TableRow><TableCell colSpan={6} className="text-center py-10"><Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" /></TableCell></TableRow>
-                ) : filteredTransactions.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-10">No transactions found for this filter.</TableCell></TableRow>
-                ) : (
-                  filteredTransactions.map((t) => {
-                    const descParts = t.description?.split("|").map(s => s.trim()) || [];
-                    let direction = descParts[0] || "—";
-                    let note = descParts.slice(1).join(" | ").trim() || "—";
-                    if (!direction.includes("Money In") && !direction.includes("Money Out")) {
-                       direction = t.type === "income" || t.description?.toLowerCase().includes("income") ? "Money In" : "Money Out";
-                       note = t.description || "—";
-                    }
-                    const isIn = direction.includes("In");
-                    return (
-                      <TransactionRow key={t.id} transaction={t} direction={direction} note={note} isIn={isIn} onUpdate={updateTransaction} onDelete={removeTransaction} />
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Source / Type</TableHead>
+                      <TableHead>Direction</TableHead>
+                      <TableHead>Note</TableHead>
+                      <TableHead className="text-right">Amount</TableHead>
+                      <TableHead className="text-right w-[120px]">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {loading ? (
+                      <TableRow><TableCell colSpan={6} className="text-center py-10"><Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" /></TableCell></TableRow>
+                    ) : filteredTransactions.length === 0 ? (
+                      <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-10">No transactions found for this filter.</TableCell></TableRow>
+                    ) : (
+                      filteredTransactions.map((t) => {
+                        const descParts = t.description?.split("|").map(s => s.trim()) || [];
+                        let direction = descParts[0] || "—";
+                        let note = descParts.slice(1).join(" | ").trim() || "—";
+                        if (!direction.includes("Money In") && !direction.includes("Money Out")) {
+                           direction = t.type === "income" || t.description?.toLowerCase().includes("income") ? "Money In" : "Money Out";
+                           note = t.description || "—";
+                        }
+                        const isIn = direction.includes("In");
+                        return (
+                          <TransactionRow key={t.id} transaction={t} direction={direction} note={note} isIn={isIn} onUpdate={updateTransaction} onDelete={removeTransaction} />
+                        );
+                      })
+                    )}
+                  </TableBody>
+                </Table>
+              </>
+            )}
           </Card>
         </TabsContent>
 
@@ -760,7 +818,8 @@ function AccountsPage() {
         </TabsContent>
       </Tabs>
 
-      <Dialog open={!!statDetailType} onOpenChange={(open) => { if (!open) { setStatDetailType(null); setModalMonthFilter("all"); } }}>
+      {/* ✅ UPDATED: Modal with BOTH Week and Month Filters */}
+      <Dialog open={!!statDetailType} onOpenChange={(open) => { if (!open) { setStatDetailType(null); setModalMonthFilter("all"); setModalWeekFilter("all"); } }}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -775,13 +834,26 @@ function AccountsPage() {
           
           <div className="space-y-4">
             {(statDetailType === "income" || statDetailType === "expense") && (
-              <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
+              <div className="flex flex-wrap items-center gap-3 p-3 bg-muted/50 rounded-lg">
+                <Label className="text-sm font-semibold whitespace-nowrap">Filter by Week:</Label>
+                <Select value={modalWeekFilter} onValueChange={setModalWeekFilter}>
+                  <SelectTrigger className="w-[160px]"><SelectValue placeholder="All Weeks" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Weeks</SelectItem>
+                    {availableWeeksForStats.map(w => (
+                      <SelectItem key={w} value={w}>{w}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
                 <Label className="text-sm font-semibold whitespace-nowrap">Filter by Month:</Label>
                 <Select value={modalMonthFilter} onValueChange={setModalMonthFilter}>
-                  <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-[180px]"><SelectValue placeholder="All Months" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Time</SelectItem>
-                    {availableMonths.map(m => (<SelectItem key={m} value={m}>{formatMonthLabel(m)}</SelectItem>))}
+                    <SelectItem value="all">All Months</SelectItem>
+                    {availableMonths.map(m => (
+                      <SelectItem key={m} value={m}>{formatMonthLabel(m)}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -789,55 +861,67 @@ function AccountsPage() {
 
             {(statDetailType === "income" || statDetailType === "expense") && (
               <div className="border rounded-lg overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {transactions
-                      .filter(t => {
-                        const isIn = t.type === "income" || t.description?.includes("Money In");
-                        if (statDetailType === "income" && !isIn) return false;
-                        if (statDetailType === "expense" && isIn) return false;
-                        if (modalMonthFilter !== "all") {
-                          const tMonth = `${new Date(t.date).getFullYear()}-${String(new Date(t.date).getMonth() + 1).padStart(2, '0')}`;
-                          if (tMonth !== modalMonthFilter) return false;
-                        }
-                        return true;
-                      })
-                      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-                      .map(t => {
-                        const isIn = t.type === "income" || t.description?.includes("Money In");
-                        const descParts = t.description?.split("|").map(s => s.trim()) || [];
-                        const note = descParts.slice(1).join(" | ") || t.description || "—";
-                        return (
-                          <TableRow key={t.id}>
-                            <TableCell className="font-mono text-xs">{t.date}</TableCell>
-                            <TableCell className="text-sm">{note}</TableCell>
-                            <TableCell className={`text-right font-bold tabular-nums ${isIn ? "text-emerald-600" : "text-rose-600"}`}>
-                              {isIn ? "+" : "-"}{formatUGX(t.amount)}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    {transactions.filter(t => {
-                      const isIn = t.type === "income" || t.description?.includes("Money In");
-                      if (statDetailType === "income" && !isIn) return false;
-                      if (statDetailType === "expense" && isIn) return false;
-                      if (modalMonthFilter !== "all") {
-                        const tMonth = `${new Date(t.date).getFullYear()}-${String(new Date(t.date).getMonth() + 1).padStart(2, '0')}`;
-                        return tMonth === modalMonthFilter;
-                      }
-                      return true;
-                    }).length === 0 && (
-                      <TableRow><TableCell colSpan={3} className="text-center py-8 text-muted-foreground">No records found for this period.</TableCell></TableRow>
-                    )}
-                  </TableBody>
-                </Table>
+                {(() => {
+                  const filteredForModal = transactions.filter(t => {
+                    const isIn = t.type === "income" || t.description?.includes("Money In");
+                    if (statDetailType === "income" && !isIn) return false;
+                    if (statDetailType === "expense" && isIn) return false;
+                    
+                    const d = new Date(t.date);
+                    const tMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                    const tWeek = getWeekLabel(d);
+
+                    if (modalWeekFilter !== "all" && tWeek !== modalWeekFilter) return false;
+                    if (modalMonthFilter !== "all" && tMonth !== modalMonthFilter) return false;
+                    
+                    return true;
+                  }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+                  const groupedByDate = filteredForModal.reduce((acc, t) => {
+                    if (!acc[t.date]) acc[t.date] = [];
+                    acc[t.date].push(t);
+                    return acc;
+                  }, {} as Record<string, typeof filteredForModal>);
+
+                  if (Object.entries(groupedByDate).length === 0) {
+                    return <div className="text-center py-8 text-muted-foreground">No records found for this period.</div>;
+                  }
+
+                  return Object.entries(groupedByDate).map(([date, dayTransactions]) => {
+                    const dayTotal = dayTransactions.reduce((sum, t) => sum + t.amount, 0);
+                    return (
+                      <div key={date} className="border-b last:border-0">
+                        <div className="flex justify-between items-center bg-muted/50 p-3">
+                          <span className="font-bold text-sm flex items-center gap-2">
+                            <CalendarDays className="h-4 w-4 text-primary" />
+                            {new Date(date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                          </span>
+                          <span className={`font-bold text-sm ${statDetailType === "income" ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            Daily Total: {formatUGX(dayTotal)}
+                          </span>
+                        </div>
+                        <Table>
+                          <TableBody>
+                            {dayTransactions.map(t => {
+                              const isIn = t.type === "income" || t.description?.includes("Money In");
+                              const descParts = t.description?.split("|").map(s => s.trim()) || [];
+                              const note = descParts.slice(1).join(" | ") || t.description || "—";
+                              return (
+                                <TableRow key={t.id} className="hover:bg-muted/30">
+                                  <TableCell className="font-mono text-xs py-2 w-24">{new Date(t.date).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</TableCell>
+                                  <TableCell className="text-sm py-2">{note}</TableCell>
+                                  <TableCell className={`text-right font-bold tabular-nums py-2 ${isIn ? "text-emerald-600" : "text-rose-600"}`}>
+                                    {isIn ? "+" : "-"}{formatUGX(t.amount)}
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             )}
 
@@ -872,7 +956,7 @@ function AccountsPage() {
           </div>
           
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setStatDetailType(null); setModalMonthFilter("all"); }}>Close</Button>
+            <Button variant="outline" onClick={() => { setStatDetailType(null); setModalMonthFilter("all"); setModalWeekFilter("all"); }}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1014,11 +1098,18 @@ function TransactionForm({ onAdd, categories }: { onAdd: (e: Omit<Transaction, "
     e.preventDefault();
     const amt = Number(amount);
     if (!source.trim() || !amt || amt <= 0) return toast.error("Source and valid amount required");
-    const finalDescription = `${direction === "income" ? "Money In" : "Money Out"}${note.trim() ? ` | ${note.trim()}` : ""}`;
+    
+    const finalDescription = `${direction === "income" ? "Money In" : "Money Out"} | ${source.trim()}${note.trim() ? ` | ${note.trim()}` : ""}`;
+    
     setSubmitting(true);
     const success = await onAdd({ type: source.trim(), amount: amt, date, description: finalDescription });
     setSubmitting(false);
-    if (success) { setSource(""); setAmount(""); setNote(""); }
+    if (success) { 
+      setSource(""); 
+      setAmount(""); 
+      setNote(""); 
+      toast.success("Transaction recorded! (Check your filters above if you don't see it immediately)");
+    }
   };
 
   return (

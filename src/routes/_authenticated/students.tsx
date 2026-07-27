@@ -3,7 +3,7 @@ import { useMemo, useState, useEffect } from "react";
 import {
   Pencil, GraduationCap, ArrowUpCircle, Plus, Search,
   Trash2, Loader2, Clock, AlertTriangle, CheckCircle2, Info,
-  MoreVertical, ArrowUp, ArrowDown, Download
+  MoreVertical, ArrowUp, ArrowDown, Download, Calendar
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,7 +30,7 @@ import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import * as XLSX from "xlsx"; // ✅ Professional Excel Export
+import * as XLSX from "xlsx";
 
 export const Route = createFileRoute("/_authenticated/students")({
   validateSearch: (search) => ({
@@ -111,8 +111,9 @@ function NextPaymentInfo({ student }: { student: Student }) {
   if (student.status === "graduated") return <span className="text-muted-foreground text-xs">—</span>;
   
   let nextDue: Date | null = null;
-  if (student.paid_until) nextDue = new Date(student.paid_until);
-  else if (student.last_payment_date) {
+  if (student.paid_until) {
+    nextDue = new Date(student.paid_until);
+  } else if (student.last_payment_date) {
     const last = new Date(student.last_payment_date);
     const cycleDays = student.payment_cycle_days ?? 30;
     nextDue = new Date(last);
@@ -193,10 +194,9 @@ function StudentsPage() {
   const [levelFilter, setLevelFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   
-  // ✅ NEW: Advanced Filters
   const [filterYear, setFilterYear] = useState<string>("all");
   const [filterMonth, setFilterMonth] = useState<string>("all");
-  const [balanceFilter, setBalanceFilter] = useState<string>("all"); // "all" or "owing"
+  const [balanceFilter, setBalanceFilter] = useState<string>("all");
   
   const [sortField, setSortField] = useState<'name' | 'reg_no' | 'balance'>('reg_no');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
@@ -246,7 +246,6 @@ function StudentsPage() {
 
   useEffect(() => { setLevelFilter("all"); }, [courseFilter]);
 
-  // ✅ Derive available years and months from student data
   const availableYears = useMemo(() => {
     const years = new Set<string>();
     students.forEach(s => {
@@ -305,7 +304,6 @@ function StudentsPage() {
     }), [students]
   );
 
-  // ✅ UPDATED: Filtering with Year, Month, and Balance logic
   const filtered = useMemo(() => {
     let result = students.filter(s => {
       const matchQuery = s.name.toLowerCase().includes(query.toLowerCase()) || s.reg_no.toLowerCase().includes(query.toLowerCase());
@@ -382,12 +380,19 @@ function StudentsPage() {
   };
 
   const saveEdit = async (updated: Student) => {
-    const todayStr = new Date().toISOString().split("T")[0];
     const { error } = await supabase.from("students").update({
-      name: updated.name, reg_no: updated.reg_no, course: updated.course, level: updated.level,
-      status: updated.status, balance: updated.balance, payment_cycle_days: updated.payment_cycle_days,
-      last_payment_date: todayStr, paid_until: null,
+      name: updated.name,
+      reg_no: updated.reg_no,
+      course: updated.course,
+      level: updated.level,
+      status: updated.status,
+      balance: updated.balance,
+      payment_cycle_days: updated.payment_cycle_days,
+      last_payment_date: updated.last_payment_date,
+      paid_until: updated.paid_until,
+      enrolled_date: updated.enrolled_date,
     }).eq("id", updated.id);
+    
     if (error) { toast.error("Update failed: " + error.message); return; }
     toast.success("Student updated");
     setEditing(null);
@@ -418,7 +423,6 @@ function StudentsPage() {
   const closeDetails = () => { setViewing(null); setViewingPayments([]); };
   const lifetimeTotal = useMemo(() => viewingPayments.reduce((sum, p) => sum + (p.amount_paid ?? 0), 0), [viewingPayments]);
 
-  // ✅ NEW: Professional Excel (XLSX) Export Function
   const exportXLSX = () => {
     if (filtered.length === 0) return toast.error("No students to export");
     
@@ -453,7 +457,7 @@ function StudentsPage() {
         "Status": s.status.charAt(0).toUpperCase() + s.status.slice(1),
         "Balance (UGX)": s.balance,
         "Next Payment Date": nextDueStr,
-        "Admission Date": new Date(s.created_at).toLocaleDateString('en-GB')
+        "Admission Date": new Date(s.enrolled_date || s.created_at).toLocaleDateString('en-GB')
       };
     });
 
@@ -523,7 +527,6 @@ function StudentsPage() {
             </Button>
           </div>
 
-          {/* ✅ NEW: Advanced Filters */}
           <Select value={filterYear} onValueChange={setFilterYear}>
             <SelectTrigger className="w-[120px]"> <SelectValue placeholder="Year" /> </SelectTrigger>
             <SelectContent>
@@ -666,6 +669,7 @@ function StudentsPage() {
 
       <EditDialog student={editing} onClose={() => setEditing(null)} onSave={saveEdit} />
 
+      {/* ✅ UPDATED: Student Info Dialog with Exact Payment Periods */}
       <Dialog open={!!viewing} onOpenChange={o => !o && closeDetails()}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{viewing?.name} — Student Details</DialogTitle></DialogHeader>
@@ -699,19 +703,31 @@ function StudentsPage() {
                   <p className="text-xs text-muted-foreground py-4 text-center">No payment records yet.</p>
                 ) : (
                   <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                    {viewingPayments.map(p => (
-                      <div key={p.id} className="flex items-center justify-between text-xs border-b pb-2 gap-2">
-                        <div className="flex flex-col">
-                          <span className="font-medium">{formatMonthLabel(p.month_year)}</span>
-                          <span className="text-muted-foreground text-[10px]">
-                            {p.payment_date} · {p.months_covered ?? 1} mo{(p.months_covered ?? 1) > 1 ? "s" : ""}
-                            {p.note?.toLowerCase().includes("backfilled") ? " · historical" : ""}
-                          </span>
+                    {viewingPayments.map(p => {
+                      // ✅ Calculate exact start and end dates for the payment period
+                      const startDate = new Date(p.payment_date);
+                      const endDate = new Date(p.payment_date);
+                      const monthsCovered = p.months_covered || 1;
+                      endDate.setDate(startDate.getDate() + (monthsCovered * 30)); // Approx 30 days per month
+
+                      const startStr = startDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                      const endStr = endDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+
+                      return (
+                        <div key={p.id} className="flex items-center justify-between text-xs border-b pb-2 gap-2">
+                          <div className="flex flex-col">
+                            {/* ✅ Shows exact date range like "12 Aug 2026 — 12 Sep 2026" */}
+                            <span className="font-medium text-primary">{startStr} — {endStr}</span>
+                            <span className="text-muted-foreground text-[10px] mt-0.5">
+                              {p.method} · {monthsCovered} mo{monthsCovered > 1 ? "s" : ""} covered
+                              {p.note?.toLowerCase().includes("backfilled") ? " · historical" : ""}
+                            </span>
+                          </div>
+                          <span className="font-medium text-green-600 shrink-0">{formatUGX(p.amount_paid)}</span>
+                          <Badge variant={p.status === "paid" ? "default" : p.status === "partial" ? "outline" : "destructive"} className="text-[10px] shrink-0">{p.status}</Badge>
                         </div>
-                        <span className="font-medium text-green-600 shrink-0">{formatUGX(p.amount_paid)}</span>
-                        <Badge variant={p.status === "paid" ? "default" : p.status === "partial" ? "outline" : "destructive"} className="text-[10px] shrink-0">{p.status}</Badge>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -743,28 +759,35 @@ function StudentsPage() {
   );
 }
 
+// ✅ UPDATED: Edit Dialog with Enrollment Date and Last Payment Date Pickers
 function EditDialog({ student, onClose, onSave }: { student: Student | null; onClose: () => void; onSave: (s: Student) => void }) {
   const [draft, setDraft] = useState<Student | null>(null);
   useEffect(() => { setDraft(student); }, [student]);
 
   const projectedDueDate = useMemo(() => {
-    if (!draft?.last_payment_date) return "Not set";
-    const last = new Date(draft.last_payment_date);
-    const days = draft.payment_cycle_days ?? 30;
-    last.setDate(last.getDate() + days);
-    return last.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-  }, [draft?.last_payment_date, draft?.payment_cycle_days]);
+    if (draft?.paid_until) {
+      return new Date(draft.paid_until).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    if (draft?.last_payment_date) {
+      const last = new Date(draft.last_payment_date);
+      const days = draft.payment_cycle_days ?? 30;
+      last.setDate(last.getDate() + days);
+      return last.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    return "Not set";
+  }, [draft?.last_payment_date, draft?.payment_cycle_days, draft?.paid_until]);
 
   if (!student || !draft) return null;
   const levels = COURSES[draft.course]?.levels ?? [];
 
   return (
     <Dialog open={!!student} onOpenChange={o => !o && onClose()}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Edit Student</DialogTitle></DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="grid gap-2"><Label>Full Name</Label><Input value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} /></div>
           <div className="grid gap-2"><Label>Registration No.</Label><Input value={draft.reg_no} onChange={e => setDraft({ ...draft, reg_no: e.target.value })} /></div>
+          
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-2">
               <Label>Course</Label>
@@ -781,27 +804,61 @@ function EditDialog({ student, onClose, onSave }: { student: Student | null; onC
               </Select>
             </div>
           </div>
+
+          {/* ✅ NEW: Exact Date Controls */}
           <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-2"><Label>Balance (UGX)</Label><Input type="number" value={draft.balance} onChange={e => setDraft({ ...draft, balance: Number(e.target.value) })} /></div>
             <div className="grid gap-2">
-              <Label className="text-primary font-semibold">Days Until Next Payment</Label>
-              <Input type="number" value={draft.payment_cycle_days ?? 30} onChange={e => setDraft({ ...draft, payment_cycle_days: Number(e.target.value) })} placeholder="e.g. 15, 30, 45" />
+              <Label className="flex items-center gap-1"><Calendar className="h-3.5 w-3.5" /> Enrollment Date</Label>
+              <Input 
+                type="date" 
+                value={draft.enrolled_date || draft.created_at?.split('T')[0] || ""} 
+                onChange={e => setDraft({ ...draft, enrolled_date: e.target.value || null })} 
+              />
+              <p className="text-[10px] text-muted-foreground">Date student joined</p>
+            </div>
+            <div className="grid gap-2">
+              <Label className="flex items-center gap-1 text-primary font-semibold"><Calendar className="h-3.5 w-3.5" /> Next Due Date</Label>
+              <Input 
+                type="date" 
+                value={draft.paid_until || ""} 
+                onChange={e => setDraft({ ...draft, paid_until: e.target.value || null })} 
+              />
+              <p className="text-[10px] text-muted-foreground">Exact date payment is due</p>
             </div>
           </div>
+
+          <div className="grid gap-2">
+            <Label>Last Payment Date</Label>
+            <Input 
+              type="date" 
+              value={draft.last_payment_date || ""} 
+              onChange={e => setDraft({ ...draft, last_payment_date: e.target.value || null })} 
+            />
+          </div>
+
+          <div className="grid gap-2">
+            <Label>Days Until Next Payment (Fallback)</Label>
+            <Input type="number" value={draft.payment_cycle_days ?? 30} onChange={e => setDraft({ ...draft, payment_cycle_days: Number(e.target.value) })} placeholder="e.g. 30" />
+          </div>
+
           <div className="rounded-lg bg-muted/50 p-3 text-sm flex items-center justify-between border border-dashed">
             <span className="text-muted-foreground">Projected Next Due Date:</span>
             <span className="font-bold text-primary">{projectedDueDate}</span>
           </div>
-          <div className="grid gap-2">
-            <Label>Status</Label>
-            <Select value={draft.status} onValueChange={(v: Status) => setDraft({ ...draft, status: v })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="promoted">Promoted</SelectItem>
-                <SelectItem value="graduated">Graduated</SelectItem>
-              </SelectContent>
-            </Select>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-2"><Label>Balance (UGX)</Label><Input type="number" value={draft.balance} onChange={e => setDraft({ ...draft, balance: Number(e.target.value) })} /></div>
+            <div className="grid gap-2">
+              <Label>Status</Label>
+              <Select value={draft.status} onValueChange={(v: Status) => setDraft({ ...draft, status: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="promoted">Promoted</SelectItem>
+                  <SelectItem value="graduated">Graduated</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </div>
         <DialogFooter>

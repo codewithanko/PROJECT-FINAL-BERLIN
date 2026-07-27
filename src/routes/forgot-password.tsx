@@ -15,20 +15,27 @@ export const Route = createFileRoute("/forgot-password")({
 });
 
 function ForgotPasswordPage() {
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email) return;
+    if (!username.trim()) return toast.error("Please enter your username");
+    
     setLoading(true);
     try {
       const { error } = await supabase
         .from("password_reset_requests")
-        .insert({ email, message: message || null });
+        .insert({ 
+          username: username.trim(), 
+          message: message.trim() || null,
+          status: "pending"
+        });
+        
       if (error) throw error;
+      
       setSubmitted(true);
       toast.success("Request sent to administrator");
     } catch (err: any) {
@@ -41,7 +48,6 @@ function ForgotPasswordPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-md">
-
         <div className="flex justify-center mb-6">
           <div className="h-16 w-16 rounded-2xl bg-primary/10 text-primary flex items-center justify-center">
             <KeyRound className="h-8 w-8" />
@@ -53,17 +59,16 @@ function ForgotPasswordPage() {
             <>
               <h1 className="text-2xl font-bold">Forgot your password?</h1>
               <p className="text-muted-foreground text-sm mt-1">
-                Submit your email below. Your school administrator will reset your
-                password and send you a new one.
+                Enter your username below. Your school administrator will be notified to reset it for you.
               </p>
               <form onSubmit={submit} className="space-y-4 mt-6">
                 <div className="space-y-2">
-                  <Label htmlFor="email">Username</Label>
+                  <Label htmlFor="username">Username</Label>
                   <Input
-                    id="email"
+                    id="username"
                     placeholder="e.g. receptionist1"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
                     required
                   />
                 </div>
@@ -74,7 +79,7 @@ function ForgotPasswordPage() {
                     rows={3}
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
-                    placeholder="Anything they should know..."
+                    placeholder="e.g. I forgot my password, please help..."
                   />
                 </div>
                 <Button type="submit" className="w-full" disabled={loading}>
@@ -88,13 +93,12 @@ function ForgotPasswordPage() {
             </>
           ) : (
             <div className="text-center py-4">
-              <div className="h-14 w-14 rounded-full bg-success/10 text-success flex items-center justify-center mx-auto">
+              <div className="h-14 w-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
                 <CheckCircle2 className="h-7 w-7" />
               </div>
               <h2 className="text-xl font-bold mt-4">Request received</h2>
               <p className="text-muted-foreground text-sm mt-2">
-                Your administrator has been notified. You'll receive a new
-                temporary password shortly.
+                Your administrator has been notified. Please contact them directly or wait for them to provide your new temporary password.
               </p>
             </div>
           )}

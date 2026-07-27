@@ -4,7 +4,7 @@ import {
   Users, UserCheck, GraduationCap, DollarSign,
   CreditCard, TrendingUp, AlertTriangle, BookOpen,
   ArrowUp, ArrowDown, Loader2, CalendarDays, ChevronRight,
-  Pencil, Trash2
+  Pencil, Trash2, KeyRound, CheckCircle2
 } from "lucide-react";
 import {
   PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 import { formatUGX } from "@/lib/courses";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
@@ -61,7 +62,6 @@ function Dashboard() {
       const { data: students } = await supabase.from("students").select("id, status, course, balance");
       
       const totalStudents = students?.length ?? 0;
-      
       const activeStudents = students?.filter(s => s.status === "active" || s.status === "promoted").length ?? 0;
       const graduated = students?.filter(s => s.status === "graduated").length ?? 0;
       
@@ -299,6 +299,9 @@ function Dashboard() {
           ))
         )}
       </div>
+
+      {/* ✅ SECURE: Password Reset Requests Widget */}
+      <PasswordResetRequestsWidget />
 
       {/* Upcoming Events & Reminders Widget */}
       <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-accent">
@@ -549,5 +552,102 @@ function StatCard({ stat, onClick }: { stat: Stat; onClick: () => void }) {
         <span className="text-muted-foreground">{stat.trend.label}</span>
       </div>
     </div>
+  );
+}
+
+// ✅ SECURE: Password Reset Requests Widget (Checks for username in email or metadata)
+function PasswordResetRequestsWidget() {
+  const [requests, setRequests] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+
+  useEffect(() => {
+    const checkAdminAndFetch = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      // ✅ BULLETPROOF CHECK: Checks if the email contains your username, 
+      // OR if the raw username metadata matches exactly.
+      const isAdmin = user?.email?.includes("ankotrip1@gmail.com") || user?.user_metadata?.username === "ankotrip1@gmail.com";
+      setIsSuperAdmin(!!isAdmin);
+
+      if (isAdmin) {
+        const { data } = await supabase
+          .from("password_reset_requests")
+          .select("*")
+          .eq("status", "pending")
+          .order("requested_at", { ascending: false });
+        
+        if (data) setRequests(data);
+      }
+      setLoading(false);
+    };
+    
+    checkAdminAndFetch();
+  }, []);
+
+  const markAsResolved = async (id: string) => {
+    const { error } = await supabase
+      .from("password_reset_requests")
+      .update({ status: "resolved" })
+      .eq("id", id);
+      
+    if (!error) {
+      toast.success("Marked as resolved");
+      // Refresh the list
+      const { data } = await supabase
+        .from("password_reset_requests")
+        .select("*")
+        .eq("status", "pending")
+        .order("requested_at", { ascending: false });
+      if (data) setRequests(data);
+    }
+  };
+
+  // ✅ If not the super admin, render absolutely nothing
+  if (!isSuperAdmin) return null;
+  if (loading) return (
+    <div className="flex items-center gap-2 text-sm text-muted-foreground p-4">
+      <Loader2 className="h-4 w-4 animate-spin" /> Loading admin requests...
+    </div>
+  );
+  if (requests.length === 0) return null; // Hides the widget completely if there are no pending requests
+
+  return (
+    <Card className="border-amber-200 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-800">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2 text-amber-700 dark:text-amber-400">
+          <KeyRound className="h-4 w-4" />
+          Pending Password Reset Requests ({requests.length})
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {requests.map((req) => (
+          <div key={req.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-white dark:bg-card border border-amber-200 dark:border-amber-800 gap-3">
+            <div className="flex-1">
+              <p className="font-semibold text-sm">{req.username}</p>
+              <p className="text-xs text-muted-foreground">
+                Requested: {new Date(req.requested_at).toLocaleString()}
+              </p>
+              {req.message && (
+                <p className="text-xs text-muted-foreground mt-1 italic">
+                  "{req.message}"
+                </p>
+              )}
+            </div>
+            <Button 
+              size="sm" 
+              variant="outline" 
+              className="h-8 text-xs border-amber-300 text-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900 shrink-0"
+              onClick={() => markAsResolved(req.id)}
+            >
+              <CheckCircle2 className="h-3 w-3 mr-1" /> Mark Resolved
+            </Button>
+          </div>
+        ))}
+        <p className="text-xs text-muted-foreground mt-2 bg-amber-100 dark:bg-amber-900/40 p-2 rounded">
+          💡 <strong>Admin Action:</strong> Go to Supabase Auth → Users, find the user, and reset their password manually. Then click "Mark Resolved" here.
+        </p>
+      </CardContent>
+    </Card>
   );
 }

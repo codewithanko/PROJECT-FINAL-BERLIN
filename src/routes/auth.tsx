@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { CheckCircle2, Loader2, GraduationCap, TrendingUp, Users } from "lucide-react";
+import { CheckCircle2, Loader2, GraduationCap, TrendingUp, Users, Eye, EyeOff } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,18 +18,17 @@ function AuthPage() {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false); // ✅ NEW: Password visibility toggle
   const [loading, setLoading] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
 
-  // Professional school management images (Replace these URLs with your own school photos later!)
   const backgroundImages = [
-    "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=1920&q=80", // Analytics dashboard
-    "https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?w=1920&q=80", // Business meeting
-    "https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1920&q=80", // Students collaborating
-    "https://images.unsplash.com/photo-1531403009284-440f080d1e12?w=1920&q=80", // Team collaboration
+    "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=1920&q=80",
+    "https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?w=1920&q=80",
+    "https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1920&q=80",
+    "https://images.unsplash.com/photo-1531403009284-440f080d1e12?w=1920&q=80",
   ];
 
-  // Auto-rotate images every 6 seconds
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentImageIndex((prev) => (prev + 1) % backgroundImages.length);
@@ -37,7 +36,6 @@ function AuthPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Check if user is already logged in and send them to the DASHBOARD
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       if (data.user) navigate({ to: "/dashboard", replace: true });
@@ -52,8 +50,6 @@ function AuthPage() {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       toast.success("Welcome back!");
-      
-      // UPDATED: Send to /dashboard. The AppShell will automatically route them based on their role.
       navigate({ to: "/dashboard", replace: true });
     } catch (err: any) {
       toast.error(err.message ?? "Sign-in failed");
@@ -73,7 +69,6 @@ function AuthPage() {
     <div className="min-h-screen grid lg:grid-cols-2">
       {/* ── Left Panel with Background Images ── */}
       <div className="hidden lg:flex flex-col justify-between relative overflow-hidden">
-        {/* Background Image Slideshow */}
         <div className="absolute inset-0">
           {backgroundImages.map((img, index) => (
             <div
@@ -82,18 +77,12 @@ function AuthPage() {
                 index === currentImageIndex ? "opacity-100" : "opacity-0"
               }`}
             >
-              <img
-                src={img}
-                alt={`School management ${index + 1}`}
-                className="w-full h-full object-cover"
-              />
-              {/* Dark gradient overlay to ensure text is always readable */}
+              <img src={img} alt={`School management ${index + 1}`} className="w-full h-full object-cover" />
               <div className="absolute inset-0 bg-gradient-to-br from-sidebar/95 via-sidebar/90 to-oklch(0.22 0.10 277)/95" />
             </div>
           ))}
         </div>
 
-        {/* Floating Stats Cards */}
         <div className="absolute top-20 right-10 space-y-3 z-10">
           <div className="bg-white/10 backdrop-blur-md rounded-xl p-3 border border-white/20 shadow-xl">
             <div className="flex items-center gap-2 text-white">
@@ -109,9 +98,7 @@ function AuthPage() {
           </div>
         </div>
 
-        {/* Content */}
         <div className="relative z-10 flex flex-col justify-between p-12 text-sidebar-foreground h-full">
-          {/* Logo */}
           <div className="flex items-center gap-3">
             <div className="h-12 w-12 rounded-xl bg-white/15 flex items-center justify-center text-sidebar-foreground shadow-lg backdrop-blur-sm border border-white/20">
               <GraduationCap className="h-7 w-7" />
@@ -122,7 +109,6 @@ function AuthPage() {
             </div>
           </div>
 
-          {/* Main Content */}
           <div className="space-y-8">
             <p className="text-xs tracking-[0.3em] text-white/70 font-medium">SCHOOL MANAGEMENT SYSTEM</p>
             <h1 className="text-4xl xl:text-5xl font-bold leading-tight text-white">
@@ -132,7 +118,6 @@ function AuthPage() {
               One organised platform for students, staff, finance and performance — built for academic teams that move fast.
             </p>
             
-            {/* Features List */}
             <ul className="space-y-4 pt-4">
               {features.map((f) => (
                 <li key={f.title} className="flex items-start gap-3 transition-all duration-300 hover:translate-x-1 group">
@@ -148,7 +133,6 @@ function AuthPage() {
             </ul>
           </div>
 
-          {/* Footer with Image Indicators */}
           <div className="flex items-center justify-between">
             <p className="text-xs text-white/60">© {new Date().getFullYear()} Sandstone School. All rights reserved.</p>
             <div className="flex gap-2">
@@ -170,8 +154,6 @@ function AuthPage() {
       {/* ── Right Panel (Login Form) ── */}
       <div className="flex items-center justify-center p-6 sm:p-12 bg-background">
         <div className="w-full max-w-md">
-          
-          {/* Mobile Logo (Clean & Centered) */}
           <div className="lg:hidden flex flex-col items-center justify-center mb-8 gap-2">
             <div className="h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center text-primary shadow-sm">
               <GraduationCap className="h-9 w-9" />
@@ -181,35 +163,48 @@ function AuthPage() {
           </div>
 
           <h2 className="text-3xl font-bold">Welcome Back</h2>
-          <p className="text-muted-foreground mt-1">Sign in with the username given to you by the admin.</p>
+          <p className="text-muted-foreground mt-1">Sign in with your assigned credentials.</p>
 
           <div className="mt-8 rounded-2xl border bg-card shadow-sm p-6 space-y-5 transition-all duration-300 hover:shadow-md">
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="username">Username</Label>
+                {/* ✅ REMOVED: All hints and examples for security */}
                 <Input
                   id="username"
                   autoComplete="username"
-                  placeholder="e.g. receptionist1"
+                  placeholder="Username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   required
                 />
-                <p className="text-xs text-muted-foreground">Format: role + number (e.g. <code>admin1</code>, <code>accountant2</code>).</p>
               </div>
+              
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="password">Password</Label>
                   <Link to="/forgot-password" className="text-xs text-primary hover:underline">Forgot password?</Link>
                 </div>
-                <Input
-                  id="password"
-                  type="password"
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                />
+                {/* ✅ ADDED: Working Show/Hide Password Toggle */}
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
 
               <Button
@@ -222,11 +217,11 @@ function AuthPage() {
             </form>
 
             <p className="text-center text-xs text-muted-foreground">
-              Built and Mastered By The Kelly Dev Enterprise
+              @kk Dev Tech Solutions
             </p>
           </div>
         </div>
       </div>
     </div>
   );
-}  
+}
