@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { 
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, NotebookPen, 
   Download, Loader2, CalendarDays, Target, Pencil, AlertTriangle,
-  ChevronRight, CheckCircle2, ChevronUp, ChevronDown
+  ChevronRight, CheckCircle2, ChevronUp, ChevronDown, X, Minimize2, Maximize2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,17 +87,31 @@ function AccountsPage() {
 
   const [selectedYear, setSelectedYear] = useState("all");
   const [selectedSpecificMonth, setSelectedSpecificMonth] = useState("all");
+  const [filterSpecificDate, setFilterSpecificDate] = useState("");
 
   const [statDetailType, setStatDetailType] = useState<"income" | "expense" | "outstanding" | null>(null);
   const [modalMonthFilter, setModalMonthFilter] = useState<string>("all");
-  const [modalWeekFilter, setModalWeekFilter] = useState<string>("all"); // ✅ NEW: Modal week filter
+  const [modalWeekFilter, setModalWeekFilter] = useState<string>("all");
+  const [modalSpecificDate, setModalSpecificDate] = useState("");
+  const [isBreakdownCollapsed, setIsBreakdownCollapsed] = useState(false);
   
   const [plannerWeek, setPlannerWeek] = useState(getWeekLabel());
   const [statsMonthFilter, setStatsMonthFilter] = useState<string>("all");
-  const [statsWeekFilter, setStatsWeekFilter] = useState<string>("all"); // ✅ NEW: Stats week filter
+  const [statsWeekFilter, setStatsWeekFilter] = useState<string>("all");
 
-  // ✅ NEW: Collapsible Table State
   const [isTableCollapsed, setIsTableCollapsed] = useState(false);
+
+  // ✅ NEW: Daily Snapshot State
+  const [dailyDate, setDailyDate] = useState(() => new Date().toISOString().slice(0,10));
+  const dailyTotals = useMemo(() => {
+    let income = 0, expense = 0;
+    const items = transactions.filter(t => t.date === dailyDate);
+    for (const t of items) {
+      const isIn = t.type === "income" || t.description?.includes("Money In");
+      if (isIn) income += Number(t.amount); else expense += Number(t.amount);
+    }
+    return { income, expense, net: income - expense, items };
+  }, [transactions, dailyDate]);
 
   const fetchTransactions = useCallback(async () => {
     setLoading(true);
@@ -147,12 +161,14 @@ function AccountsPage() {
     return Array.from(months).sort().reverse();
   }, [transactions]);
 
-  // ✅ NEW: Available weeks for stats filtering
   const availableWeeksForStats = useMemo(() => {
     const weeks = new Set<string>();
+    const currentYear = new Date().getFullYear();
+    for (let i = 1; i <= 53; i++) {
+      weeks.add(`${currentYear}-W${String(i).padStart(2, '0')}`);
+    }
     transactions.forEach(t => {
-      const d = new Date(t.date);
-      weeks.add(getWeekLabel(d));
+      weeks.add(getWeekLabel(new Date(t.date)));
     });
     return Array.from(weeks).sort().reverse();
   }, [transactions]);
@@ -171,7 +187,6 @@ function AccountsPage() {
     return Array.from(cats).sort();
   }, [transactions]);
 
-  // ✅ UPDATED: Period stats totals (handles both Week and Month filters)
   const periodStatsTotals = useMemo(() => {
     if (statsWeekFilter === "all" && statsMonthFilter === "all") return null;
     
@@ -213,6 +228,7 @@ function AccountsPage() {
       const tYear = String(d.getFullYear());
       const tMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 
+      if (filterSpecificDate && t.date !== filterSpecificDate) return false;
       if (selectedYear !== "all" && tYear !== selectedYear) return false;
       if (selectedSpecificMonth !== "all" && tMonth !== selectedSpecificMonth) return false;
 
@@ -239,7 +255,7 @@ function AccountsPage() {
         t.type.toLowerCase().includes(searchLower) || 
         (t.description && t.description.toLowerCase().includes(searchLower));
     });
-  }, [transactions, filterType, filterCategory, searchQuery, dateRange, dateFrom, dateTo, selectedYear, selectedSpecificMonth]);
+  }, [transactions, filterType, filterCategory, searchQuery, dateRange, dateFrom, dateTo, selectedYear, selectedSpecificMonth, filterSpecificDate]);
 
   const globalTotals = useMemo(() => {
     let income = 0, expense = 0;
@@ -324,7 +340,7 @@ function AccountsPage() {
       toast.error("Failed to delete transactions: " + error.message);
     } else {
       toast.success(`Successfully deleted ${idsToDelete.length} transaction(s).`);
-      setDateFrom(""); setDateTo(""); setDateRange("all"); setSelectedYear("all"); setSelectedSpecificMonth("all");
+      setDateFrom(""); setDateTo(""); setDateRange("all"); setSelectedYear("all"); setSelectedSpecificMonth("all"); setFilterSpecificDate("");
       fetchTransactions();
     }
   };
@@ -374,7 +390,9 @@ function AccountsPage() {
     XLSX.utils.book_append_sheet(wb, ws, "Filtered Transactions");
     
     let filename = "transactions";
-    if (selectedSpecificMonth !== "all") {
+    if (filterSpecificDate) {
+      filename = `transactions_${filterSpecificDate}`;
+    } else if (selectedSpecificMonth !== "all") {
       const [year, month] = selectedSpecificMonth.split('-');
       const monthName = new Date(Number(year), Number(month) - 1).toLocaleDateString('en-UG', { month: 'long', year: 'numeric' });
       filename = `transactions_${monthName.replace(' ', '_')}`;
@@ -431,7 +449,6 @@ function AccountsPage() {
         <Button variant="outline" onClick={exportTransactionsExcel}><Download className="h-4 w-4 mr-2" /> Export Excel</Button>
       </header>
 
-      {/* ✅ UPDATED: Stats Period with BOTH Week and Month Filters */}
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-3">
@@ -476,6 +493,19 @@ function AccountsPage() {
         </div>
       </Card>
 
+      {/* ✅ NEW: Daily Snapshot Card (Placed first for morning checks) */}
+      <Card className="p-5 border-primary/20 bg-primary/5">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wide">Daily Snapshot</h2>
+          <Input type="date" value={dailyDate} onChange={e=>setDailyDate(e.target.value)} className="w-[150px] h-8" />
+        </div>
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <div><p className="text-xs text-muted-foreground">In</p><p className="font-bold text-emerald-600">{formatUGX(dailyTotals.income)}</p></div>
+          <div><p className="text-xs text-muted-foreground">Out</p><p className="font-bold text-rose-600">{formatUGX(dailyTotals.expense)}</p></div>
+          <div><p className="text-xs text-muted-foreground">Net</p><p className={`font-bold ${dailyTotals.net>=0?"text-primary":"text-destructive"}`}>{dailyTotals.net>=0?"+":"-"}{formatUGX(Math.abs(dailyTotals.net))}</p></div>
+        </div>
+      </Card>
+
       <div>
         <div className="flex items-center gap-2 mb-2">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Grand Total (All Time)</h2>
@@ -488,7 +518,6 @@ function AccountsPage() {
         </div>
       </div>
 
-      {/* ✅ UPDATED: Dynamic Period Stats (Week or Month) */}
       {periodStatsTotals && (
         <div>
           <div className="flex items-center gap-2 mb-2">
@@ -639,11 +668,31 @@ function AccountsPage() {
             {!isTableCollapsed && (
               <>
                 <div className="p-4 border-b bg-muted/10 flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2 bg-primary/5 px-3 py-1.5 rounded-md border border-primary/20">
+                    <Label className="text-xs font-semibold text-primary whitespace-nowrap">Specific Date:</Label>
+                    <Input 
+                      type="date" 
+                      value={filterSpecificDate} 
+                      onChange={e => setFilterSpecificDate(e.target.value)} 
+                      className="w-auto h-8 text-xs" 
+                    />
+                    {filterSpecificDate && (
+                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setFilterSpecificDate("")}>
+                        <X className="h-3 w-3" />
+                      </Button>
+                    )}
+                  </div>
+
                   <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-auto max-w-[150px]" placeholder="From" />
                   <span className="text-muted-foreground">to</span>
                   <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-auto max-w-[150px]" placeholder="To" />
                   <Button variant="default" size="sm" onClick={() => setDateRange("custom")} className="bg-primary text-primary-foreground">Apply Filter</Button>
-                  <Button variant="outline" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); setDateRange("all"); setSelectedYear("all"); setSelectedSpecificMonth("all"); }}>Reset Filters</Button>
+                  <Button variant="outline" size="sm" onClick={() => { 
+                    setDateFrom(""); setDateTo(""); setDateRange("all"); 
+                    setSelectedYear("all"); setSelectedSpecificMonth("all"); 
+                    setFilterSpecificDate(""); 
+                  }}>Reset Filters</Button>
+                  
                   {filteredTransactions.length > 0 && (
                     <Button variant="destructive" size="sm" onClick={handleDeleteFiltered}>
                       <Trash2 className="h-4 w-4 mr-2" /> Delete Filtered ({filteredTransactions.length})
@@ -818,50 +867,90 @@ function AccountsPage() {
         </TabsContent>
       </Tabs>
 
-      {/* ✅ UPDATED: Modal with BOTH Week and Month Filters */}
-      <Dialog open={!!statDetailType} onOpenChange={(open) => { if (!open) { setStatDetailType(null); setModalMonthFilter("all"); setModalWeekFilter("all"); } }}>
+      <Dialog open={!!statDetailType} onOpenChange={(open) => { 
+        if (!open) { 
+          setStatDetailType(null); 
+          setModalMonthFilter("all"); 
+          setModalWeekFilter("all"); 
+          setModalSpecificDate("");
+          setIsBreakdownCollapsed(false);
+        } 
+      }}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {statDetailType === "income" && <TrendingUp className="h-5 w-5 text-emerald-600" />}
               {statDetailType === "expense" && <TrendingDown className="h-5 w-5 text-rose-600" />}
               {statDetailType === "outstanding" && <AlertTriangle className="h-5 w-5 text-amber-600" />}
-              {statDetailType === "income" && "Income Breakdown"}
-              {statDetailType === "expense" && "Expense Breakdown"}
-              {statDetailType === "outstanding" && "Outstanding Fees Breakdown"}
+              Daily Financial Breakdown
             </DialogTitle>
           </DialogHeader>
           
           <div className="space-y-4">
             {(statDetailType === "income" || statDetailType === "expense") && (
-              <div className="flex flex-wrap items-center gap-3 p-3 bg-muted/50 rounded-lg">
-                <Label className="text-sm font-semibold whitespace-nowrap">Filter by Week:</Label>
-                <Select value={modalWeekFilter} onValueChange={setModalWeekFilter}>
-                  <SelectTrigger className="w-[160px]"><SelectValue placeholder="All Weeks" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Weeks</SelectItem>
-                    {availableWeeksForStats.map(w => (
-                      <SelectItem key={w} value={w}>{w}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="flex flex-col sm:flex-row flex-wrap items-start sm:items-center gap-3 p-3 bg-muted/50 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <Label className="text-sm font-semibold whitespace-nowrap">Filter by Week:</Label>
+                  <Select value={modalWeekFilter} onValueChange={setModalWeekFilter}>
+                    <SelectTrigger className="w-[140px]"><SelectValue placeholder="All Weeks" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Weeks</SelectItem>
+                      {availableWeeksForStats.map(w => (
+                        <SelectItem key={w} value={w}>{w}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-                <Label className="text-sm font-semibold whitespace-nowrap">Filter by Month:</Label>
-                <Select value={modalMonthFilter} onValueChange={setModalMonthFilter}>
-                  <SelectTrigger className="w-[180px]"><SelectValue placeholder="All Months" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Months</SelectItem>
-                    {availableMonths.map(m => (
-                      <SelectItem key={m} value={m}>{formatMonthLabel(m)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center gap-2">
+                  <Label className="text-sm font-semibold whitespace-nowrap">Filter by Month:</Label>
+                  <Select value={modalMonthFilter} onValueChange={setModalMonthFilter}>
+                    <SelectTrigger className="w-[140px]"><SelectValue placeholder="All Months" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Months</SelectItem>
+                      {availableMonths.map(m => (
+                        <SelectItem key={m} value={m}>{formatMonthLabel(m)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex items-center gap-2 bg-primary/5 px-3 py-1.5 rounded-md border border-primary/20">
+                  <Label className="text-xs font-semibold text-primary whitespace-nowrap">Specific Date:</Label>
+                  <Input 
+                    type="date" 
+                    value={modalSpecificDate} 
+                    onChange={e => setModalSpecificDate(e.target.value)} 
+                    className="w-auto h-8 text-xs" 
+                  />
+                  {modalSpecificDate && (
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setModalSpecificDate("")}>
+                      <X className="h-3 w-3" />
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
 
             {(statDetailType === "income" || statDetailType === "expense") && (
               <div className="border rounded-lg overflow-hidden">
-                {(() => {
+                <div className="flex justify-between items-center p-3 bg-muted/30 border-b">
+                  <span className="text-sm font-semibold text-muted-foreground">Transaction Details</span>
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="h-7 text-xs"
+                    onClick={() => setIsBreakdownCollapsed(!isBreakdownCollapsed)}
+                  >
+                    {isBreakdownCollapsed ? (
+                      <><Maximize2 className="h-3 w-3 mr-1" /> Expand List</>
+                    ) : (
+                      <><Minimize2 className="h-3 w-3 mr-1" /> Minimize List</>
+                    )}
+                  </Button>
+                </div>
+
+                {!isBreakdownCollapsed && (() => {
                   const filteredForModal = transactions.filter(t => {
                     const isIn = t.type === "income" || t.description?.includes("Money In");
                     if (statDetailType === "income" && !isIn) return false;
@@ -873,36 +962,44 @@ function AccountsPage() {
 
                     if (modalWeekFilter !== "all" && tWeek !== modalWeekFilter) return false;
                     if (modalMonthFilter !== "all" && tMonth !== modalMonthFilter) return false;
+                    if (modalSpecificDate && t.date !== modalSpecificDate) return false;
                     
                     return true;
                   }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
                   const groupedByDate = filteredForModal.reduce((acc, t) => {
-                    if (!acc[t.date]) acc[t.date] = [];
-                    acc[t.date].push(t);
+                    if (!acc[t.date]) acc[t.date] = { transactions: [], income: 0, expense: 0 };
+                    acc[t.date].transactions.push(t);
+                    const isIn = t.type === "income" || t.description?.includes("Money In");
+                    if (isIn) acc[t.date].income += Number(t.amount);
+                    else acc[t.date].expense += Number(t.amount);
                     return acc;
-                  }, {} as Record<string, typeof filteredForModal>);
+                  }, {} as Record<string, { transactions: typeof filteredForModal; income: number; expense: number }>);
 
                   if (Object.entries(groupedByDate).length === 0) {
                     return <div className="text-center py-8 text-muted-foreground">No records found for this period.</div>;
                   }
 
-                  return Object.entries(groupedByDate).map(([date, dayTransactions]) => {
-                    const dayTotal = dayTransactions.reduce((sum, t) => sum + t.amount, 0);
+                  return Object.entries(groupedByDate).map(([date, data]) => {
+                    const net = data.income - data.expense;
                     return (
                       <div key={date} className="border-b last:border-0">
-                        <div className="flex justify-between items-center bg-muted/50 p-3">
+                        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center bg-muted/50 p-3 gap-2">
                           <span className="font-bold text-sm flex items-center gap-2">
                             <CalendarDays className="h-4 w-4 text-primary" />
                             {new Date(date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
                           </span>
-                          <span className={`font-bold text-sm ${statDetailType === "income" ? 'text-emerald-600' : 'text-rose-600'}`}>
-                            Daily Total: {formatUGX(dayTotal)}
-                          </span>
+                          <div className="flex gap-3 sm:gap-4 text-xs sm:text-sm font-semibold">
+                            <span className="text-emerald-600">In: {formatUGX(data.income)}</span>
+                            <span className="text-rose-600">Out: {formatUGX(data.expense)}</span>
+                            <span className={net >= 0 ? "text-primary" : "text-destructive"}>
+                              Net: {net >= 0 ? "+" : "-"}{formatUGX(Math.abs(net))}
+                            </span>
+                          </div>
                         </div>
                         <Table>
                           <TableBody>
-                            {dayTransactions.map(t => {
+                            {data.transactions.map(t => {
                               const isIn = t.type === "income" || t.description?.includes("Money In");
                               const descParts = t.description?.split("|").map(s => s.trim()) || [];
                               const note = descParts.slice(1).join(" | ") || t.description || "—";
@@ -956,7 +1053,13 @@ function AccountsPage() {
           </div>
           
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setStatDetailType(null); setModalMonthFilter("all"); setModalWeekFilter("all"); }}>Close</Button>
+            <Button variant="outline" onClick={() => { 
+              setStatDetailType(null); 
+              setModalMonthFilter("all"); 
+              setModalWeekFilter("all"); 
+              setModalSpecificDate("");
+              setIsBreakdownCollapsed(false);
+            }}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

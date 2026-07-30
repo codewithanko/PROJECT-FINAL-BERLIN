@@ -52,10 +52,10 @@ function AdmissionsPage() {
   const [course, setCourse] = useState<CourseKey>("english");
   const [level, setLevel] = useState<string>(COURSES.english.levels[0]);
   
-  // ✅ NEW: Agreed Fee State
+  // Agreed Fee State
   const [agreedFee, setAgreedFee] = useState("");
 
-  // ── Enrolment type: New vs Existing (already-at-school) student ──
+  // Enrolment type: New vs Existing (already-at-school) student
   const [isExisting, setIsExisting] = useState(false);
   const [monthsAtSchool, setMonthsAtSchool] = useState(1);
   const [paidConsistently, setPaidConsistently] = useState(true);
@@ -64,6 +64,9 @@ function AdmissionsPage() {
   const [includeRegFee, setIncludeRegFee] = useState(true);
   const [numMonths, setNumMonths] = useState(1);
   const [amountPaid, setAmountPaid] = useState<string>("");
+  
+  // Payment Date State (Defaults to today, but can be changed)
+  const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   // Auto-generate reg number
   useEffect(() => {
@@ -96,7 +99,6 @@ function AdmissionsPage() {
   };
 
   // ── Fee calculations ──────────────────────────────────────────────────
-  // ✅ UPDATED: Use agreed fee if provided, otherwise use standard course fee
   const baseFee = agreedFee ? Number(agreedFee) : COURSES[course].fee;
   const tuitionFee = baseFee * numMonths;
   const regFee = includeRegFee ? REGISTRATION_FEE : 0;
@@ -106,7 +108,7 @@ function AdmissionsPage() {
   const isFullyPaid = paid >= totalDue;
   const isOverpaid = paid > totalDue;
 
-  // ── Submit ─────────────────────────────────────────────────────────────
+  // ─ Submit ─────────────────────────────────────────────────────────────
   const submit = async () => {
     if (!name.trim()) return toast.error("Full name is required");
     if (!regNo.trim()) return toast.error("Registration number is required");
@@ -116,12 +118,12 @@ function AdmissionsPage() {
 
     setSubmitting(true);
 
-    // ── Calculate paid_until as exactly 30 days per month from today ──
+    // ── Calculate paid_until as exactly 30 days per month from the PAYMENT DATE ──
     let paidUntilStr: string | null = null;
     if (paid > 0 && numMonths > 0) {
-      const now = new Date();
-      const paidUntilDate = new Date(now);
-      paidUntilDate.setDate(now.getDate() + (numMonths * 30));
+      const payDate = new Date(paymentDate);
+      const paidUntilDate = new Date(payDate);
+      paidUntilDate.setDate(payDate.getDate() + (numMonths * 30));
       paidUntilStr = paidUntilDate.toISOString().slice(0, 10);
     }
 
@@ -142,11 +144,11 @@ function AdmissionsPage() {
       level,
       status: "active",
       balance: Math.max(0, balance),
-      last_payment_date: paid > 0 ? new Date().toISOString().split("T")[0] : null,
+      last_payment_date: paid > 0 ? paymentDate : null,
       payment_cycle_days: 30,
       paid_until: paidUntilStr,
       enrolled_date: enrolledDate,
-      agreed_fee: agreedFee ? Number(agreedFee) : null, // ✅ NEW: Save agreed fee
+      agreed_fee: agreedFee ? Number(agreedFee) : null,
     });
 
     if (studentError) {
@@ -163,10 +165,29 @@ function AdmissionsPage() {
       .single();
 
     // 2. Record CURRENT admission-day payment if any amount was paid
+    // FIXED: Now uses the selected paymentDate and creates a linked transaction_id
+    let transactionId: string | null = null;
+
     if (paid > 0 && studentData) {
-      const currentMonthYear = monthYearOf(new Date());
+      const currentMonthYear = monthYearOf(new Date(paymentDate));
       const status = paid >= totalDue ? "paid" : "partial";
       
+      // Create the Transaction FIRST to get the ID
+      const { data: txData, error: txErr } = await supabase.from("transactions").insert({
+        type: "income",
+        amount: paid,
+        date: paymentDate, // Uses the date you picked!
+        description: `Money In | Admission payment — ${name.trim()} (${regNo.trim()}) [${level}] ${numMonths} month(s)${includeRegFee ? " incl. reg fee" : ""}`,
+      }).select().single();
+
+      if (txErr) {
+        toast.error("Ledger entry failed: " + txErr.message);
+        setSubmitting(false);
+        return;
+      }
+      transactionId = txData.id;
+
+      // Insert Payment with the linked transaction_id
       await supabase.from("payments").insert({
         student_id: studentData.id,
         student_name: name.trim(),
@@ -177,39 +198,45 @@ function AdmissionsPage() {
         amount_paid: paid,
         balance: Math.max(0, balance),
         method: "cash",
-        payment_date: new Date().toISOString().split("T")[0],
+        payment_date: paymentDate, // Uses the date you picked!
         month_year: currentMonthYear,
         months_covered: numMonths,
         status,
         note: isExisting ? "Admission payment (existing student — current dues)" : "Admission payment",
-      });
-
-      await supabase.from("transactions").insert({
-        type: "income",
-        amount: paid,
-        date: new Date().toISOString().split("T")[0],
-        description: `Money In | Admission payment — ${name.trim()} (${regNo.trim()}) [${level}] ${numMonths} month(s)${includeRegFee ? " incl. reg fee" : ""}`,
+        transaction_id: transactionId, // Links them perfectly!
       });
     }
 
     // 3. Backfill HISTORICAL payments for an existing student
+    // FIXED: Loops sequentially to link every single historical transaction to its payment
     if (isExisting && paidConsistently && monthsAtSchool > 0 && studentData) {
-      const paymentRows = [];
-      const transactionRows = [];
-      
       for (let i = monthsAtSchool; i >= 1; i--) {
-        const paymentDate = new Date();
-        paymentDate.setMonth(paymentDate.getMonth() - i);
-        const dateStr = paymentDate.toISOString().split("T")[0];
-        const monthYear = monthYearOf(paymentDate);
-        
-        paymentRows.push({
+        const paymentDateHist = new Date();
+        paymentDateHist.setMonth(paymentDateHist.getMonth() - i);
+        const dateStr = paymentDateHist.toISOString().split("T")[0];
+        const monthYear = monthYearOf(paymentDateHist);
+
+        // Create transaction first to get the ID
+        const { data: txData, error: txErr } = await supabase.from("transactions").insert({
+          type: "income",
+          amount: baseFee,
+          date: dateStr,
+          description: `Money In | Historical payment — ${name.trim()} (${regNo.trim()}) [${monthYear}]`,
+        }).select().single();
+
+        if (txErr) {
+          toast.error(`Historical backfill failed for ${monthYear}: ` + txErr.message);
+          continue; 
+        }
+
+        // Insert payment linked to the transaction
+        await supabase.from("payments").insert({
           student_id: studentData.id,
           student_name: name.trim(),
           reg_no: regNo.trim(),
           course,
           level,
-          amount_due: baseFee, // ✅ UPDATED: Use baseFee (agreed or standard)
+          amount_due: baseFee,
           amount_paid: baseFee,
           balance: 0,
           method: "cash",
@@ -218,21 +245,8 @@ function AdmissionsPage() {
           months_covered: 1,
           status: "paid",
           note: "Backfilled — historical payment prior to system setup",
+          transaction_id: txData.id, // ✅ THE FIX: Links them perfectly!
         });
-        
-        transactionRows.push({
-          type: "income",
-          amount: baseFee, // ✅ UPDATED: Use baseFee
-          date: dateStr,
-          description: `Money In | Historical payment — ${name.trim()} (${regNo.trim()}) [${monthYear}]`,
-        });
-      }
-      
-      const { error: backfillError } = await supabase.from("payments").insert(paymentRows);
-      if (backfillError) {
-        toast.error("Historical backfill failed: " + backfillError.message);
-      } else {
-        await supabase.from("transactions").insert(transactionRows);
       }
     }
 
@@ -243,7 +257,6 @@ function AdmissionsPage() {
     });
 
     setSubmitting(false);
-    // ✅ FIXED: Added search parameter to satisfy TanStack Router types
     navigate({ to: "/students", search: { search: "" } });
   };
 
@@ -385,7 +398,6 @@ function AdmissionsPage() {
                 </Select>
               </div>
 
-              {/* ✅ NEW: Agreed Fee Input */}
               <div className="grid gap-2 md:col-span-2">
                 <Label>Negotiated / Agreed Fee (Optional)</Label>
                 <Input 
@@ -415,7 +427,6 @@ function AdmissionsPage() {
               </p>
             )}
 
-            {/* Registration fee checkbox */}
             <div className="flex items-start gap-3 rounded-lg border bg-muted/40 p-4">
               <Checkbox
                 id="reg-fee"
@@ -436,7 +447,6 @@ function AdmissionsPage() {
               </div>
             </div>
 
-            {/* Number of Months Selector */}
             <div className="grid gap-2">
               <Label>Number of Months {isExisting ? "Being Paid For Now" : "Paid For"}</Label>
               <Select value={String(numMonths)} onValueChange={(v) => setNumMonths(parseInt(v))}>
@@ -452,7 +462,19 @@ function AdmissionsPage() {
               </p>
             </div>
 
-            {/* Amount paid */}
+            {/* NEW: Payment Date Picker */}
+            <div className="grid gap-2">
+              <Label>Date Cash Was Received</Label>
+              <Input 
+                type="date" 
+                value={paymentDate} 
+                onChange={e => setPaymentDate(e.target.value)} 
+              />
+              <p className="text-xs text-muted-foreground">
+                Defaults to today. If you are backdating an admission or recording cash received yesterday, change it here so it shows up on the correct day in Accounts.
+              </p>
+            </div>
+
             <div className="grid gap-2">
               <Label>Amount Paid Today (UGX)</Label>
               <Input
@@ -464,11 +486,10 @@ function AdmissionsPage() {
                 placeholder={`0 — max ${formatUGX(totalDue)}`}
               />
               <p className="text-xs text-muted-foreground">
-                Enter how much the student paid today. Leave as 0 if no payment was made today.
+                Enter how much the student paid. Leave as 0 if no payment was made yet.
               </p>
             </div>
 
-            {/* Payment status indicator */}
             {amountPaid !== "" && paid >= 0 && (
               <div className={`flex items-center gap-3 rounded-lg p-4 text-sm font-medium border ${
                 isFullyPaid
@@ -488,7 +509,6 @@ function AdmissionsPage() {
           </section>
 
           <div className="flex justify-end gap-3">
-            {/* ✅ FIXED: Added search parameter to satisfy TanStack Router types */}
             <Button variant="outline" onClick={() => navigate({ to: "/students", search: { search: "" } })}>
               Cancel
             </Button>
@@ -499,7 +519,7 @@ function AdmissionsPage() {
           </div>
         </div>
 
-        {/* ── Right: Invoice Summary ── */}
+        {/* ─ Right: Invoice Summary ── */}
         <aside className="rounded-2xl border bg-card p-6 space-y-5 h-fit sticky top-6">
           <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
             <Receipt className="h-4 w-4" /> Fee Summary

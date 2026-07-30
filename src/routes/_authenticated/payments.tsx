@@ -87,7 +87,7 @@ function getEndMonth(startMonth: string, count: number) {
 type Student = {
   id: string; name: string; reg_no: string;
   course: string; level: string; status: string; balance: number;
-  agreed_fee?: number | null; // ✅ Added agreed_fee
+  agreed_fee?: number | null;
 };
 
 type Payment = {
@@ -96,6 +96,7 @@ type Payment = {
   amount_due: number; amount_paid: number; balance: number;
   method: string; payment_date: string; month_year: string;
   status: string; note?: string; months_covered?: number;
+  transaction_id?: string | null;
 };
 
 type PaymentForm = {
@@ -150,6 +151,16 @@ function PaymentsPage() {
   const [otherIncomeForm, setOtherIncomeForm] = useState({
     source: "", amount: "", method: "cash", date: new Date().toISOString().slice(0, 10), note: ""
   });
+
+  const [dailyDate, setDailyDate] = useState(() => new Date().toISOString().slice(0,10));
+  const dailyStats = useMemo(() => {
+    const dayPayments = payments.filter(p => p.payment_date === dailyDate);
+    const dayOther = otherIncome.filter(o => o.date === dailyDate);
+    return {
+      income: dayPayments.reduce((s,p)=>s+p.amount_paid,0) + dayOther.reduce((s,o)=>s+o.amount,0),
+      count: dayPayments.length + dayOther.length,
+    };
+  }, [payments, otherIncome, dailyDate]);
 
   const fetchOtherIncome = async () => {
     const { data } = await supabase.from("transactions")
@@ -240,15 +251,16 @@ function PaymentsPage() {
   }, [payments, monthFilter, courseFilter, levelFilter, search]);
 
   const stats = useMemo(() => {
-    const thisMonth = payments.filter(p => p.month_year === currentMonthYear());
-    return {
-      collected:   thisMonth.reduce((s, p) => s + p.amount_paid, 0),
+    const ym = currentMonthYear();
+    const collected = payments.filter(p => p.payment_date?.slice(0,7) === ym).reduce((s,p)=>s+p.amount_paid,0)
+      + otherIncome.filter(o => o.date?.slice(0,7) === ym).reduce((s,o)=>s+o.amount,0);
+    return { 
+      collected, 
       outstanding: students.reduce((sum, s) => sum + (s.balance > 0 ? s.balance : 0), 0),
-      overdue:     overdueStudents.length,
+      overdue: overdueStudents.length 
     };
-  }, [payments, students, overdueStudents]);
+  }, [payments, otherIncome, students, overdueStudents]);
 
-  // ✅ FIXED: Replaced || with ?? to prevent TypeScript error
   const getNewDue = (f: PaymentForm) => {
     const student = students.find(s => s.id === f.student_id);
     const courseFee = student?.agreed_fee ?? COURSES[f.course]?.fee ?? 0;
@@ -260,7 +272,6 @@ function PaymentsPage() {
     return f.current_balance + (courseFee * f.num_months);
   };
 
-  // ✅ FIXED: Replaced || with ?? to prevent TypeScript error
   const selectStudent = (s: Student) => {
     const courseFee = s.agreed_fee ?? COURSES[s.course]?.fee ?? 0;
     const currentBalance = s.balance > 0 ? s.balance : 0;
@@ -283,7 +294,6 @@ function PaymentsPage() {
     setStudentSearch("");
   };
 
-  // ✅ FIXED: Replaced || with ?? to prevent TypeScript error
   const openNew = (student?: Student) => {
     setEditing(null);
     setStudentSearch("");
@@ -327,6 +337,7 @@ function PaymentsPage() {
     setOpen(true);
   };
 
+  // ✅ FIXED: Bulletproof sync between payments, transactions, AND student balance
   const save = async () => {
     if (!form.student_id)  return toast.error("Please select a student");
     if (!form.amount_paid) return toast.error("Enter amount paid");
@@ -346,31 +357,87 @@ function PaymentsPage() {
     paidUntilDate.setDate(paymentDate.getDate() + (form.num_months * 30));
     const paidUntilStr = paidUntilDate.toISOString().slice(0, 10);
 
+    const monthsArr = getMonthsArray(form.start_month, form.num_months);
+    const endMonthStr = formatMonthYear(monthsArr[monthsArr.length - 1]);
+    const startMonthStr = formatMonthYear(monthsArr[0]);
+    const desc = `Money In | Payment — ${form.student_name} (${form.reg_no}) ${form.level ? `[${form.level}]` : ""} ${startMonthStr} to ${endMonthStr} (${form.num_months} month${form.num_months > 1 ? "s" : ""})`;
+
     if (editing) {
+      // 1. Update Payment
       const { error } = await supabase.from("payments").update({
         amount_due: due, amount_paid: paid, balance,
         method: form.method, payment_date: form.payment_date,
-        month_year: form.start_month,
-        months_covered: form.num_months,
+        month_year: form.start_month, months_covered: form.num_months,
         status, note: form.note,
       }).eq("id", editing.id);
       
       if (error) { toast.error("Update failed: " + error.message); setSubmitting(false); return; }
+
+      // 2. Sync Linked Transaction
+      const existingTxId = (editing as any).transaction_id;
+      if (paid > 0) {
+        if (existingTxId) {
+          await supabase.from("transactions").update({ 
+            amount: paid, 
+            date: form.payment_date, 
+            description: desc 
+          }).eq("id", existingTxId);
+        } else {
+          const { data: txData, error: txErr } = await supabase.from("transactions").insert({
+            type: "income", amount: paid, date: form.payment_date, description: desc
+          }).select().single();
+          
+          if (!txErr && txData) {
+            await supabase.from("payments").update({ transaction_id: txData.id }).eq("id", editing.id);
+          }
+        }
+      } else {
+        if (existingTxId) {
+          await supabase.from("transactions").delete().eq("id", existingTxId);
+          await supabase.from("payments").update({ transaction_id: null }).eq("id", editing.id);
+        }
+      }
+
+      // ✅ 3. AIRTIGHT FIX: Update the student's balance using the Difference Method
+      const balanceDiff = paid - editing.amount_paid;
+      const { data: currentStudent } = await supabase
+        .from("students")
+        .select("balance, last_payment_date") // ✅ FIXED: Added last_payment_date to select
+        .eq("id", form.student_id)
+        .single();
+      
+      const newBalance = (currentStudent?.balance || 0) - balanceDiff;
+      
+      await supabase.from("students").update({ 
+        balance: newBalance,
+        last_payment_date: paid > 0 ? form.payment_date : (currentStudent?.last_payment_date || null)
+      }).eq("id", form.student_id);
+      
       toast.success("Payment updated");
     } else {
+      let transactionId: string | null = null;
+
+      if (paid > 0) {
+        const { data: txData, error: txErr } = await supabase.from("transactions").insert({
+          type: "income", amount: paid, date: form.payment_date, description: desc
+        }).select().single();
+
+        if (txErr) { toast.error("Ledger entry failed: " + txErr.message); setSubmitting(false); return; }
+        transactionId = txData.id;
+      }
+
       const { error } = await supabase.from("payments").insert({
         student_id: form.student_id, student_name: form.student_name,
         reg_no: form.reg_no, course: form.course, level: form.level,
         amount_due: due, amount_paid: paid, balance,
         method: form.method, payment_date: form.payment_date,
-        month_year: form.start_month,
-        months_covered: form.num_months,
+        month_year: form.start_month, months_covered: form.num_months,
         status, note: form.note,
+        transaction_id: transactionId,
       });
       
       if (error) { toast.error("Failed to record: " + error.message); setSubmitting(false); return; }
 
-      // ✅ FIXED: Replaced || with ?? to prevent TypeScript error
       const student = students.find(s => s.id === form.student_id);
       const courseFee = student?.agreed_fee ?? COURSES[form.course]?.fee ?? 0;
       const shouldUpdatePaidUntil = paid >= courseFee;
@@ -386,19 +453,6 @@ function PaymentsPage() {
 
       await supabase.from("students").update(studentUpdate).eq("id", form.student_id);
 
-      if (paid > 0) {
-        const monthsArr = getMonthsArray(form.start_month, form.num_months);
-        const endMonthStr = formatMonthYear(monthsArr[monthsArr.length - 1]);
-        const startMonthStr = formatMonthYear(monthsArr[0]);
-        
-        await supabase.from("transactions").insert({
-          type: "income", 
-          amount: paid, 
-          date: form.payment_date,
-          description: `Money In | Payment — ${form.student_name} (${form.reg_no}) ${form.level ? `[${form.level}]` : ""} ${startMonthStr} to ${endMonthStr} (${form.num_months} month${form.num_months > 1 ? "s" : ""})`,
-        });
-      }
-
       toast.success("Payment recorded", {
         description: balance > 0
           ? `Balance of ${formatUGX(balance)} still outstanding`
@@ -408,6 +462,40 @@ function PaymentsPage() {
 
     setOpen(false);
     setSubmitting(false);
+    fetchAll();
+  };
+
+  // ✅ FIXED: Airtight delete that restores the student's balance perfectly
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    const txId = (deleting as any).transaction_id;
+    
+    // 1. Delete the linked transaction
+    if (txId) {
+      await supabase.from("transactions").delete().eq("id", txId);
+    }
+
+    // 2. AIRTIGHT FIX: Restore the student's balance using the Difference Method
+    const balanceDiff = 0 - deleting.amount_paid; // This is negative, so subtracting it ADDS the money back
+    const { data: currentStudent } = await supabase
+      .from("students")
+      .select("balance")
+      .eq("id", deleting.student_id)
+      .single();
+    
+    const newBalance = (currentStudent?.balance || 0) - balanceDiff;
+    
+    await supabase.from("students").update({ balance: newBalance }).eq("id", deleting.student_id);
+
+    // 3. Delete the payment
+    const { error } = await supabase.from("payments").delete().eq("id", deleting.id);
+    if (error) { 
+      toast.error("Delete failed: " + error.message); 
+      return; 
+    }
+    
+    toast.success("Payment record and transaction removed");
+    setDeleting(null);
     fetchAll();
   };
 
@@ -436,31 +524,6 @@ function PaymentsPage() {
     const { error } = await supabase.from("transactions").delete().eq("id", id);
     if (error) return toast.error("Failed: " + error.message);
     toast.success("Income record deleted");
-    fetchAll();
-  };
-
-  const confirmDelete = async () => {
-    if (!deleting) return;
-    
-    if (deleting.amount_paid > 0) {
-      await supabase
-        .from("transactions")
-        .delete()
-        .eq("type", "income")
-        .eq("amount", deleting.amount_paid)
-        .eq("date", deleting.payment_date)
-        .like("description", `%${deleting.student_name}%`)
-        .like("description", `%${deleting.reg_no}%`);
-    }
-
-    const { error } = await supabase.from("payments").delete().eq("id", deleting.id);
-    if (error) { 
-      toast.error("Delete failed: " + error.message); 
-      return; 
-    }
-    
-    toast.success("Payment record and transaction removed");
-    setDeleting(null);
     fetchAll();
   };
 
@@ -556,6 +619,15 @@ function PaymentsPage() {
           </Button>
         </div>
       </header>
+
+      <Card className="p-5 border-primary/20 bg-primary/5">
+        <div className="flex items-center justify-between mb-2">
+          <Label className="text-xs font-semibold">Daily Collections</Label>
+          <Input type="date" value={dailyDate} onChange={e=>setDailyDate(e.target.value)} className="w-[150px] h-8" />
+        </div>
+        <p className="text-2xl font-bold text-emerald-600">{formatUGX(dailyStats.income)}</p>
+        <p className="text-xs text-muted-foreground">{dailyStats.count} transaction{dailyStats.count!==1?"s":""} on this date</p>
+      </Card>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <StatCard icon={<TrendingUp className="h-5 w-5" />} label="Collected This Month"
