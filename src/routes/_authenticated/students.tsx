@@ -3,7 +3,7 @@ import { useMemo, useState, useEffect } from "react";
 import {
   Pencil, GraduationCap, ArrowUpCircle, Plus, Search,
   Trash2, Loader2, Clock, AlertTriangle, CheckCircle2, Info,
-  MoreVertical, ArrowUp, ArrowDown, Download, Calendar
+  MoreVertical, ArrowUp, ArrowDown, Download, Calendar, Receipt
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,7 +27,7 @@ import {
   DropdownMenuItem, DropdownMenuSeparator
 } from "@/components/ui/dropdown-menu";
 import { Label } from "@/components/ui/label";
-import { Card } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import * as XLSX from "xlsx";
@@ -71,7 +71,7 @@ type Student = {
   paid_until: string | null;
   enrolled_date: string | null;
   created_at: string;
-  agreed_fee?: number | null; // ✅ NEW: Added agreed_fee
+  agreed_fee?: number | null;
 };
 
 type PaymentRecord = {
@@ -380,7 +380,6 @@ function StudentsPage() {
     fetchStudents();
   };
 
-  // ✅ UPDATED: saveEdit now includes agreed_fee
   const saveEdit = async (updated: Student) => {
     const { error } = await supabase.from("students").update({
       name: updated.name,
@@ -393,7 +392,7 @@ function StudentsPage() {
       last_payment_date: updated.last_payment_date,
       paid_until: updated.paid_until,
       enrolled_date: updated.enrolled_date,
-      agreed_fee: updated.agreed_fee, // ✅ Saves the negotiated fee
+      agreed_fee: updated.agreed_fee,
     }).eq("id", updated.id);
     
     if (error) { toast.error("Update failed: " + error.message); return; }
@@ -670,7 +669,8 @@ function StudentsPage() {
         )}
       </div>
 
-      <EditDialog student={editing} onClose={() => setEditing(null)} onSave={saveEdit} />
+      {/* ✅ UPDATED: Pass onPaymentRecorded callback */}
+      <EditDialog student={editing} onClose={() => setEditing(null)} onSave={saveEdit} onPaymentRecorded={fetchStudents} />
 
       {/* ✅ UPDATED: Student Info Dialog with Exact Payment Periods */}
       <Dialog open={!!viewing} onOpenChange={o => !o && closeDetails()}>
@@ -760,10 +760,25 @@ function StudentsPage() {
   );
 }
 
-// ✅ UPDATED: Edit Dialog with Agreed Fee Input
-function EditDialog({ student, onClose, onSave }: { student: Student | null; onClose: () => void; onSave: (s: Student) => void }) {
+// ✅ UPDATED: Edit Dialog with Historical Payment Recording
+function EditDialog({ student, onClose, onSave, onPaymentRecorded }: { student: Student | null; onClose: () => void; onSave: (s: Student) => void; onPaymentRecorded: () => void }) {
   const [draft, setDraft] = useState<Student | null>(null);
-  useEffect(() => { setDraft(student); }, [student]);
+  
+  // Historical Payment State
+  const [histDate, setHistDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [histAmount, setHistAmount] = useState("");
+  const [histMonths, setHistMonths] = useState(1);
+  const [histNote, setHistNote] = useState("");
+  const [recordingPayment, setRecordingPayment] = useState(false);
+
+  useEffect(() => { 
+    setDraft(student); 
+    // Reset historical payment fields when dialog opens
+    setHistDate(new Date().toISOString().slice(0, 10));
+    setHistAmount("");
+    setHistMonths(1);
+    setHistNote("");
+  }, [student]);
 
   const projectedDueDate = useMemo(() => {
     if (draft?.paid_until) {
@@ -777,6 +792,73 @@ function EditDialog({ student, onClose, onSave }: { student: Student | null; onC
     }
     return "Not set";
   }, [draft?.last_payment_date, draft?.payment_cycle_days, draft?.paid_until]);
+
+  // ✅ NEW: Function to record a historical payment
+  const recordHistoricalPayment = async () => {
+    if (!draft || !histAmount || Number(histAmount) <= 0) {
+      return toast.error("Please enter a valid amount greater than 0");
+    }
+
+    setRecordingPayment(true);
+    const amountPaid = Number(histAmount);
+    const newBalance = Math.max(0, draft.balance - amountPaid);
+    const monthYear = `${new Date(histDate).getFullYear()}-${String(new Date(histDate).getMonth() + 1).padStart(2, '0')}`;
+    const desc = `Money In | Historical payment — ${draft.name} (${draft.reg_no}) [${draft.level}] ${histMonths} month(s)`;
+
+    try {
+      // 1. Create Transaction
+      const { data: txData, error: txErr } = await supabase.from("transactions").insert({
+        type: "income",
+        amount: amountPaid,
+        date: histDate,
+        description: desc
+      }).select().single();
+
+      if (txErr) throw txErr;
+
+      // 2. Create Payment Record
+      const { error: payErr } = await supabase.from("payments").insert({
+        student_id: draft.id,
+        student_name: draft.name,
+        reg_no: draft.reg_no,
+        course: draft.course,
+        level: draft.level,
+        amount_due: amountPaid, // Simplified for historical
+        amount_paid: amountPaid,
+        balance: newBalance,
+        method: "cash",
+        payment_date: histDate,
+        month_year: monthYear,
+        months_covered: histMonths,
+        status: newBalance === 0 ? "paid" : "partial",
+        note: histNote || "Recorded via Student Edit (Historical)",
+        transaction_id: txData.id
+      });
+
+      if (payErr) throw payErr;
+
+      // 3. Update Student Balance and Last Payment Date
+      const { error: stuErr } = await supabase.from("students").update({
+        balance: newBalance,
+        last_payment_date: histDate
+      }).eq("id", draft.id);
+
+      if (stuErr) throw stuErr;
+
+      toast.success(`Successfully recorded payment of ${formatUGX(amountPaid)} for ${histDate}`);
+      
+      // Clear inputs and refresh parent
+      setHistAmount("");
+      setHistNote("");
+      setDraft({ ...draft, balance: newBalance, last_payment_date: histDate });
+      onPaymentRecorded();
+
+    } catch (err: any) {
+      toast.error("Failed to record payment: " + err.message);
+    } finally {
+      setRecordingPayment(false);
+    }
+  };
 
   if (!student || !draft) return null;
   const levels = COURSES[draft.course]?.levels ?? [];
@@ -810,31 +892,17 @@ function EditDialog({ student, onClose, onSave }: { student: Student | null; onC
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-2">
               <Label className="flex items-center gap-1"><Calendar className="h-3.5 w-3.5" /> Enrollment Date</Label>
-              <Input 
-                type="date" 
-                value={draft.enrolled_date || draft.created_at?.split('T')[0] || ""} 
-                onChange={e => setDraft({ ...draft, enrolled_date: e.target.value || null })} 
-              />
-              <p className="text-[10px] text-muted-foreground">Date student joined</p>
+              <Input type="date" value={draft.enrolled_date || draft.created_at?.split('T')[0] || ""} onChange={e => setDraft({ ...draft, enrolled_date: e.target.value || null })} />
             </div>
             <div className="grid gap-2">
               <Label className="flex items-center gap-1 text-primary font-semibold"><Calendar className="h-3.5 w-3.5" /> Next Due Date</Label>
-              <Input 
-                type="date" 
-                value={draft.paid_until || ""} 
-                onChange={e => setDraft({ ...draft, paid_until: e.target.value || null })} 
-              />
-              <p className="text-[10px] text-muted-foreground">Exact date payment is due</p>
+              <Input type="date" value={draft.paid_until || ""} onChange={e => setDraft({ ...draft, paid_until: e.target.value || null })} />
             </div>
           </div>
 
           <div className="grid gap-2">
             <Label>Last Payment Date</Label>
-            <Input 
-              type="date" 
-              value={draft.last_payment_date || ""} 
-              onChange={e => setDraft({ ...draft, last_payment_date: e.target.value || null })} 
-            />
+            <Input type="date" value={draft.last_payment_date || ""} onChange={e => setDraft({ ...draft, last_payment_date: e.target.value || null })} />
           </div>
 
           <div className="grid gap-2">
@@ -842,28 +910,64 @@ function EditDialog({ student, onClose, onSave }: { student: Student | null; onC
             <Input type="number" value={draft.payment_cycle_days ?? 30} onChange={e => setDraft({ ...draft, payment_cycle_days: Number(e.target.value) })} placeholder="e.g. 30" />
           </div>
 
-          {/* ✅ NEW: Agreed Fee Input */}
           <div className="grid gap-2 rounded-lg border border-dashed p-3 bg-muted/30">
             <Label className="text-primary font-medium">Negotiated / Agreed Fee (Optional)</Label>
-            <Input 
-              type="number" 
-              value={draft.agreed_fee || ""} 
-              onChange={e => setDraft({ ...draft, agreed_fee: e.target.value ? Number(e.target.value) : null })} 
-              placeholder={`Leave blank for standard fee (${formatUGX(standardFee)})`} 
-            />
+            <Input type="number" value={draft.agreed_fee || ""} onChange={e => setDraft({ ...draft, agreed_fee: e.target.value ? Number(e.target.value) : null })} placeholder={`Leave blank for standard fee (${formatUGX(standardFee)})`} />
             <p className="text-[10px] text-muted-foreground">
               If the student pays a negotiated amount (e.g., 300,000 instead of {formatUGX(standardFee)}), enter it here. 
               This ensures their balance calculates to 0 when they pay the agreed amount, preventing false debt.
             </p>
           </div>
 
-          <div className="rounded-lg bg-muted/50 p-3 text-sm flex items-center justify-between border border-dashed">
-            <span className="text-muted-foreground">Projected Next Due Date:</span>
-            <span className="font-bold text-primary">{projectedDueDate}</span>
+          {/* ✅ NEW: Record Historical Payment Section */}
+          <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/50 dark:bg-emerald-950/20 dark:border-emerald-800 p-4">
+            <div className="flex items-center gap-2">
+              <Receipt className="h-4 w-4 text-emerald-600" />
+              <Label className="text-emerald-800 dark:text-emerald-300 font-bold text-sm">Record a Payment They Already Made</Label>
+            </div>
+            <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+              Use this to backdate a real payment. This will create a transaction in the Accounts ledger and reduce the student's balance.
+            </p>
+            
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-2">
+                <Label className="text-xs">Payment Date</Label>
+                <Input type="date" value={histDate} onChange={e => setHistDate(e.target.value)} className="h-9" />
+              </div>
+              <div className="grid gap-2">
+                <Label className="text-xs">Months Covered</Label>
+                <Input type="number" min="1" value={histMonths} onChange={e => setHistMonths(Number(e.target.value))} className="h-9" />
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <Label className="text-xs">Amount Paid (UGX)</Label>
+              <Input type="number" value={histAmount} onChange={e => setHistAmount(e.target.value)} placeholder="e.g. 150000" className="h-9" />
+            </div>
+
+            <div className="grid gap-2">
+              <Label className="text-xs">Note (Optional)</Label>
+              <Input value={histNote} onChange={e => setHistNote(e.target.value)} placeholder="e.g. Paid for March" className="h-9" />
+            </div>
+
+            <Button 
+              onClick={recordHistoricalPayment} 
+              disabled={recordingPayment || !histAmount} 
+              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white h-9"
+            >
+              {recordingPayment ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
+              Record Historical Payment
+            </Button>
+          </div>
+
+          <Separator />
+
+          <div className="grid gap-2">
+            <Label>Balance (UGX) <span className="text-[10px] text-muted-foreground font-normal">(Manual correction only)</span></Label>
+            <Input type="number" value={draft.balance} onChange={e => setDraft({ ...draft, balance: Number(e.target.value) })} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-2"><Label>Balance (UGX)</Label><Input type="number" value={draft.balance} onChange={e => setDraft({ ...draft, balance: Number(e.target.value) })} /></div>
             <div className="grid gap-2">
               <Label>Status</Label>
               <Select value={draft.status} onValueChange={(v: Status) => setDraft({ ...draft, status: v })}>
