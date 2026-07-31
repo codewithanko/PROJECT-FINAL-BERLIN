@@ -1,12 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { 
   Users, Wallet, Receipt, GraduationCap, Download, FileText, 
-  Loader2, Briefcase, TrendingUp, TrendingDown,
-  BarChart as BarChartIcon
+  Loader2, Briefcase, TrendingUp, TrendingDown, AlertCircle,
+  BarChart as BarChartIcon, Calendar
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   PieChart, Pie, Cell, Legend,
@@ -19,13 +22,11 @@ export const Route = createFileRoute("/_authenticated/reports")({
   component: ReportsPage,
 });
 
-// ✅ VIBRANT COLOR PALETTE FOR CHARTS
 const COLORS = [
   "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", 
   "#ec4899", "#6366f1", "#14b8a6", "#f97316", "#64748b",
 ];
 
-// ✅ FIXED: Added all courses to match admissions/students pages
 const COURSES: Record<string, { label: string }> = {
   english: { label: "English" }, 
   computer: { label: "Computer" },
@@ -52,9 +53,13 @@ function ReportsPage() {
   const [selected, setSelected] = useState<ReportKey>("students");
   const [exporting, setExporting] = useState(false);
   const [financeView, setFinanceView] = useState<"all" | "income" | "expense">("all");
+  
+  // ✅ NEW: Finance Date Filters
+  const [reportYear, setReportYear] = useState<string>("all");
+  const [reportMonth, setReportMonth] = useState<string>("all");
 
-  // Live Data States
   const [studentRows, setStudentRows] = useState<any[]>([]);
+  const [topDebtors, setTopDebtors] = useState<any[]>([]);
   const [studentsByCourse, setStudentsByCourse] = useState<any[]>([]);
   const [financeMonthly, setFinanceMonthly] = useState<any[]>([]);
   const [financeRows, setFinanceRows] = useState<any[]>([]);
@@ -65,7 +70,6 @@ function ReportsPage() {
 
   const current = actions.find((a) => a.key === selected)!;
 
-  // ─ Fetch Data from Supabase ──────────────────────────────────────────────
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -79,9 +83,15 @@ function ReportsPage() {
           course: COURSES[s.course]?.label || s.course || "Unknown",
           status: s.status ? s.status.charAt(0).toUpperCase() + s.status.slice(1) : "Unknown",
           balance: Number(s.balance) || 0,
-          created_at: s.created_at
         }));
         setStudentRows(sRows);
+
+        // ✅ NEW: Top 5 Debtors
+        const debtors = [...sRows]
+          .filter(s => s.balance > 0)
+          .sort((a, b) => b.balance - a.balance)
+          .slice(0, 5);
+        setTopDebtors(debtors);
 
         const courseCounts: Record<string, number> = {};
         studentsData.forEach(s => {
@@ -91,7 +101,6 @@ function ReportsPage() {
         setStudentsByCourse(Object.entries(courseCounts).map(([course, students]) => ({ course, students })));
 
         const graduatedCount = studentsData.filter(s => s.status === "graduated").length;
-        // ✅ FIXED: Include "promoted" students in the active count
         const activeCount = studentsData.filter(s => s.status === "active" || s.status === "promoted").length;
         setGraduationRows([{ year: "Current", intake: activeCount + graduatedCount, graduated: graduatedCount }]);
       }
@@ -99,33 +108,10 @@ function ReportsPage() {
       // 2. Fetch Transactions for Finance
       const { data: transData } = await supabase.from("transactions").select("*").order("date", { ascending: false });
       if (transData) {
-        const monthly: Record<string, { income: number; expenses: number }> = {};
-        const categories: Record<string, number> = {};
-
-        transData.forEach(t => {
-          const date = new Date(t.date);
-          const monthKey = date.toLocaleString("default", { month: "short" });
-          if (!monthly[monthKey]) monthly[monthKey] = { income: 0, expenses: 0 };
-          
-          const amt = Number(t.amount);
-          if (t.type === "income") {
-            monthly[monthKey].income += amt;
-          } else if (t.type === "expense") {
-            monthly[monthKey].expenses += amt;
-            const cat = t.description?.split("|")[0]?.trim() || "Uncategorized";
-            categories[cat] = (categories[cat] || 0) + amt;
-          }
-        });
-        
-        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        const fMonthly = months.map(m => ({ month: m, income: monthly[m]?.income || 0, expenses: monthly[m]?.expenses || 0 })).filter(m => m.income > 0 || m.expenses > 0);
-        
-        setFinanceMonthly(fMonthly);
-        setFinanceRows(fMonthly.map(m => ({ ...m, net: m.income - m.expenses })));
-        setExpenseCategories(Object.entries(categories).map(([name, value]) => ({ name, value })));
+        processFinanceData(transData);
       }
 
-      // 3. Fetch Staff Payroll (Gracefully handles if table doesn't exist yet)
+      // 3. Fetch Staff Payroll
       try {
         const { data: payrollData } = await supabase.from("staff_payroll_payments").select(`
           id, period_label, base_amount, advance_deduction, net_pay, paid,
@@ -143,7 +129,6 @@ function ReportsPage() {
           })));
         }
       } catch (e) {
-        // Table might not exist yet, which is fine
         console.log("Payroll table not found or not ready yet.");
       }
 
@@ -152,7 +137,51 @@ function ReportsPage() {
     fetchData();
   }, []);
 
-  // ─ DOCX EXPORT FUNCTION ──────────────────────────────────────────────────
+  // ✅ NEW: Process finance data with optional year/month filtering
+  const processFinanceData = (transData: any[]) => {
+    const monthly: Record<string, { income: number; expenses: number }> = {};
+    const categories: Record<string, number> = {};
+
+    transData.forEach(t => {
+      const date = new Date(t.date);
+      const tYear = String(date.getFullYear());
+      const tMonth = String(date.getMonth() + 1).padStart(2, "0");
+      const monthKey = date.toLocaleString("default", { month: "short" });
+
+      // Apply filters
+      if (reportYear !== "all" && tYear !== reportYear) return;
+      if (reportMonth !== "all" && tMonth !== reportMonth) return;
+
+      if (!monthly[monthKey]) monthly[monthKey] = { income: 0, expenses: 0 };
+      
+      const amt = Number(t.amount);
+      if (t.type === "income") {
+        monthly[monthKey].income += amt;
+      } else if (t.type === "expense") {
+        monthly[monthKey].expenses += amt;
+        const cat = t.description?.split("|")[0]?.trim() || "Uncategorized";
+        categories[cat] = (categories[cat] || 0) + amt;
+      }
+    });
+    
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const fMonthly = months.map(m => ({ month: m, income: monthly[m]?.income || 0, expenses: monthly[m]?.expenses || 0 })).filter(m => m.income > 0 || m.expenses > 0);
+    
+    setFinanceMonthly(fMonthly);
+    setFinanceRows(fMonthly.map(m => ({ ...m, net: m.income - m.expenses })));
+    setExpenseCategories(Object.entries(categories).map(([name, value]) => ({ name, value })));
+  };
+
+  // Re-process finance data when filters change
+  useEffect(() => {
+    const reFetch = async () => {
+      const { data: transData } = await supabase.from("transactions").select("*");
+      if (transData) processFinanceData(transData);
+    };
+    reFetch();
+  }, [reportYear, reportMonth]);
+
+  // ✅ KEPT ORIGINAL: Professional .doc Export (as you requested)
   async function exportDocx() {
     setExporting(true);
     try {
@@ -180,6 +209,22 @@ function ReportsPage() {
       setExporting(false);
     }
   }
+
+  const availableYears = useMemo(() => {
+    const years = new Set<string>();
+    const currentY = new Date().getFullYear();
+    for (let i = currentY; i >= currentY - 3; i--) years.add(String(i));
+    return Array.from(years);
+  }, []);
+
+  const availableMonths = [
+    { value: "01", label: "January" }, { value: "02", label: "February" },
+    { value: "03", label: "March" }, { value: "04", label: "April" },
+    { value: "05", label: "May" }, { value: "06", label: "June" },
+    { value: "07", label: "July" }, { value: "08", label: "August" },
+    { value: "09", label: "September" }, { value: "10", label: "October" },
+    { value: "11", label: "November" }, { value: "12", label: "December" },
+  ];
 
   return (
     <div className="space-y-8">
@@ -220,10 +265,34 @@ function ReportsPage() {
         </div>
       ) : (
         <div className="rounded-2xl border bg-card overflow-hidden">
-          <div className="p-5 border-b flex items-center gap-2">
-            <FileText className="h-5 w-5 text-primary" />
-            <h2 className="font-semibold text-lg">{current.label} — Visual Summary</h2>
+          <div className="p-5 border-b flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-primary" />
+              <h2 className="font-semibold text-lg">{current.label} — Visual Summary</h2>
+            </div>
+            
+            {/* ✅ NEW: Finance Filters */}
+            {selected === "finance" && (
+              <div className="flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-muted-foreground" />
+                <Select value={reportYear} onValueChange={setReportYear}>
+                  <SelectTrigger className="w-[100px] h-8 text-xs"><SelectValue placeholder="Year" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Years</SelectItem>
+                    {availableYears.map(y => <SelectItem key={y} value={y}>{y}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Select value={reportMonth} onValueChange={setReportMonth}>
+                  <SelectTrigger className="w-[120px] h-8 text-xs"><SelectValue placeholder="Month" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Months</SelectItem>
+                    {availableMonths.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
+          
           <div className="p-5">
             <ReportChart 
               kind={selected} 
@@ -234,8 +303,10 @@ function ReportsPage() {
               staffPayroll={staffPayroll}
               financeView={financeView}
               setFinanceView={setFinanceView}
+              topDebtors={topDebtors}
             />
           </div>
+          
           <div className="border-t">
             <ReportTable kind={selected} studentRows={studentRows} financeRows={financeRows} academicRows={[]} graduationRows={graduationRows} staffPayroll={staffPayroll} />
           </div>
@@ -246,7 +317,7 @@ function ReportsPage() {
 }
 
 // ── Chart Component (With Sub-Reports) ──────────────────────────────────────
-function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories, graduationRows, staffPayroll, financeView, setFinanceView }: any) {
+function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories, graduationRows, staffPayroll, financeView, setFinanceView, topDebtors }: any) {
   
   if (kind === "finance") {
     return (
@@ -280,7 +351,7 @@ function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories
                 )}
               </BarChart>
             </ResponsiveContainer>
-          ) : <div className="h-full flex items-center justify-center text-muted-foreground">No finance data yet</div>}
+          ) : <div className="h-full flex items-center justify-center text-muted-foreground">No finance data for this period</div>}
         </div>
 
         {(financeView === "all" || financeView === "expense") && expenseCategories.length > 0 && (
@@ -305,23 +376,43 @@ function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories
 
   if (kind === "students") {
     return (
-      <div className="h-80">
-        <p className="text-sm font-medium mb-2">Enrolment by Course</p>
-        {studentsByCourse.length > 0 ? (
-          <ResponsiveContainer>
-            <BarChart data={studentsByCourse}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-              <XAxis dataKey="course" />
-              <YAxis />
-              <Tooltip />
-              <Bar dataKey="students" name="Students" radius={[6, 6, 0, 0]}>
-                {studentsByCourse.map((_: any, i: number) => (
-                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        ) : <div className="h-full flex items-center justify-center text-muted-foreground">No student data yet</div>}
+      <div className="space-y-6">
+        {/* ✅ NEW: Top Debtors Mini-Card */}
+        {topDebtors.length > 0 && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-800 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <AlertCircle className="h-4 w-4 text-amber-600" />
+              <h3 className="text-sm font-semibold text-amber-800 dark:text-amber-400">Top 5 Outstanding Balances</h3>
+            </div>
+            <div className="space-y-2">
+              {topDebtors.map((s: any, i: number) => (
+                <div key={i} className="flex justify-between items-center text-sm">
+                  <span className="font-medium">{s.name} <span className="text-muted-foreground text-xs">({s.reg})</span></span>
+                  <span className="font-bold text-destructive">{fmtUGX(s.balance)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="h-80">
+          <p className="text-sm font-medium mb-2">Enrolment by Course</p>
+          {studentsByCourse.length > 0 ? (
+            <ResponsiveContainer>
+              <BarChart data={studentsByCourse}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                <XAxis dataKey="course" />
+                <YAxis />
+                <Tooltip />
+                <Bar dataKey="students" name="Students" radius={[6, 6, 0, 0]}>
+                  {studentsByCourse.map((_: any, i: number) => (
+                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <div className="h-full flex items-center justify-center text-muted-foreground">No student data yet</div>}
+        </div>
       </div>
     );
   }

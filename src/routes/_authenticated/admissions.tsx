@@ -41,6 +41,22 @@ function monthYearOf(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+// ✅ NEW: pulled out so it can be called again on retry, not just once on mount
+async function fetchNextRegNo(): Promise<string> {
+  const { data } = await supabase
+    .from("students")
+    .select("reg_no")
+    .order("reg_no", { ascending: false })
+    .limit(1);
+  
+  let next = 1;
+  if (data && data.length > 0) {
+    const match = data[0].reg_no.match(/(\d+)$/);
+    if (match) next = parseInt(match[1], 10) + 1;
+  }
+  return `SSL-${String(next).padStart(4, "0")}`;
+}
+
 function AdmissionsPage() {
   const navigate = useNavigate();
   const [submitting, setSubmitting] = useState(false);
@@ -51,44 +67,22 @@ function AdmissionsPage() {
   const [phone, setPhone] = useState("");
   const [course, setCourse] = useState<CourseKey>("english");
   const [level, setLevel] = useState<string>(COURSES.english.levels[0]);
-  
-  // Agreed Fee State
   const [agreedFee, setAgreedFee] = useState("");
-
-  // Enrolment type: New vs Existing (already-at-school) student
+  
   const [isExisting, setIsExisting] = useState(false);
   const [monthsAtSchool, setMonthsAtSchool] = useState(1);
   const [paidConsistently, setPaidConsistently] = useState(true);
-
-  // Payment fields
+  
   const [includeRegFee, setIncludeRegFee] = useState(true);
   const [numMonths, setNumMonths] = useState(1);
   const [amountPaid, setAmountPaid] = useState<string>("");
-  
-  // Payment Date State (Defaults to today, but can be changed)
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().slice(0, 10));
 
-  // Auto-generate reg number
+  // ✅ Always regenerate on mount
   useEffect(() => {
-    const generate = async () => {
-      const { data } = await supabase
-        .from("students")
-        .select("reg_no")
-        .order("reg_no", { ascending: false })
-        .limit(1);
-
-      let next = 1;
-      if (data && data.length > 0) {
-        const match = data[0].reg_no.match(/(\d+)$/);
-        if (match) next = parseInt(match[1], 10) + 1;
-      }
-      setRegNo(`SSL-${String(next).padStart(4, "0")}`);
-    };
-    generate();
+    fetchNextRegNo().then(setRegNo);
   }, []);
 
-  // When switching to "Existing Student", registration fee is usually
-  // already paid historically — default it off, but leave it editable.
   useEffect(() => {
     setIncludeRegFee(!isExisting);
   }, [isExisting]);
@@ -98,7 +92,6 @@ function AdmissionsPage() {
     setLevel(COURSES[v].levels[0]);
   };
 
-  // ── Fee calculations ──────────────────────────────────────────────────
   const baseFee = agreedFee ? Number(agreedFee) : COURSES[course].fee;
   const tuitionFee = baseFee * numMonths;
   const regFee = includeRegFee ? REGISTRATION_FEE : 0;
@@ -108,7 +101,20 @@ function AdmissionsPage() {
   const isFullyPaid = paid >= totalDue;
   const isOverpaid = paid > totalDue;
 
-  // ─ Submit ─────────────────────────────────────────────────────────────
+  // ✅ NEW: isolated so submit() can call it in a retry loop
+  async function insertStudentWithRetry(regNoToTry: string, payload: Record<string, any>, attemptsLeft = 3): Promise<{ regNo: string; error: any }> {
+    const { error } = await supabase.from("students").insert({ ...payload, reg_no: regNoToTry });
+    
+    // Postgres unique-violation code. If this specific reg_no collided with
+    // one created moments ago (stale cached number, or a race with another
+    // admission), silently fetch a fresh number and try again.
+    if (error?.code === "23505" && attemptsLeft > 0) {
+      const freshRegNo = await fetchNextRegNo();
+      return insertStudentWithRetry(freshRegNo, payload, attemptsLeft - 1);
+    }
+    return { regNo: regNoToTry, error };
+  }
+
   const submit = async () => {
     if (!name.trim()) return toast.error("Full name is required");
     if (!regNo.trim()) return toast.error("Registration number is required");
@@ -118,7 +124,6 @@ function AdmissionsPage() {
 
     setSubmitting(true);
 
-    // ── Calculate paid_until as exactly 30 days per month from the PAYMENT DATE ──
     let paidUntilStr: string | null = null;
     if (paid > 0 && numMonths > 0) {
       const payDate = new Date(paymentDate);
@@ -127,7 +132,6 @@ function AdmissionsPage() {
       paidUntilStr = paidUntilDate.toISOString().slice(0, 10);
     }
 
-    // ── enrolled_date: backdated for existing students ──
     const enrolledDate = isExisting
       ? (() => {
           const d = new Date();
@@ -136,10 +140,9 @@ function AdmissionsPage() {
         })()
       : new Date().toISOString().split("T")[0];
 
-    // 1. Insert Student
-    const { error: studentError } = await supabase.from("students").insert({
+    // ✅ FIXED: insert with automatic retry on reg_no collision instead of failing outright
+    const { regNo: finalRegNo, error: studentError } = await insertStudentWithRetry(regNo.trim(), {
       name: name.trim(),
-      reg_no: regNo.trim(),
       course,
       level,
       status: "active",
@@ -157,27 +160,29 @@ function AdmissionsPage() {
       return;
     }
 
-    // Fetch the new student's id
+    if (finalRegNo !== regNo.trim()) {
+      toast.info(`Note: ${regNo.trim()} was already taken — assigned ${finalRegNo} instead.`);
+    }
+
+    // Fetch the new student's id using the reg_no that actually succeeded
     const { data: studentData } = await supabase
       .from("students")
       .select("id")
-      .eq("reg_no", regNo.trim())
+      .eq("reg_no", finalRegNo)
       .single();
 
     // 2. Record CURRENT admission-day payment if any amount was paid
-    // FIXED: Now uses the selected paymentDate and creates a linked transaction_id
     let transactionId: string | null = null;
 
     if (paid > 0 && studentData) {
       const currentMonthYear = monthYearOf(new Date(paymentDate));
       const status = paid >= totalDue ? "paid" : "partial";
       
-      // Create the Transaction FIRST to get the ID
       const { data: txData, error: txErr } = await supabase.from("transactions").insert({
         type: "income",
         amount: paid,
-        date: paymentDate, // Uses the date you picked!
-        description: `Money In | Admission payment — ${name.trim()} (${regNo.trim()}) [${level}] ${numMonths} month(s)${includeRegFee ? " incl. reg fee" : ""}`,
+        date: paymentDate,
+        description: `Money In | Admission payment — ${name.trim()} (${finalRegNo}) [${level}] ${numMonths} month(s)${includeRegFee ? " incl. reg fee" : ""}`,
       }).select().single();
 
       if (txErr) {
@@ -187,28 +192,26 @@ function AdmissionsPage() {
       }
       transactionId = txData.id;
 
-      // Insert Payment with the linked transaction_id
       await supabase.from("payments").insert({
         student_id: studentData.id,
         student_name: name.trim(),
-        reg_no: regNo.trim(),
+        reg_no: finalRegNo,
         course,
         level,
         amount_due: totalDue,
         amount_paid: paid,
         balance: Math.max(0, balance),
         method: "cash",
-        payment_date: paymentDate, // Uses the date you picked!
+        payment_date: paymentDate,
         month_year: currentMonthYear,
         months_covered: numMonths,
         status,
         note: isExisting ? "Admission payment (existing student — current dues)" : "Admission payment",
-        transaction_id: transactionId, // Links them perfectly!
+        transaction_id: transactionId,
       });
     }
 
     // 3. Backfill HISTORICAL payments for an existing student
-    // FIXED: Loops sequentially to link every single historical transaction to its payment
     if (isExisting && paidConsistently && monthsAtSchool > 0 && studentData) {
       for (let i = monthsAtSchool; i >= 1; i--) {
         const paymentDateHist = new Date();
@@ -216,12 +219,11 @@ function AdmissionsPage() {
         const dateStr = paymentDateHist.toISOString().split("T")[0];
         const monthYear = monthYearOf(paymentDateHist);
 
-        // Create transaction first to get the ID
         const { data: txData, error: txErr } = await supabase.from("transactions").insert({
           type: "income",
           amount: baseFee,
           date: dateStr,
-          description: `Money In | Historical payment — ${name.trim()} (${regNo.trim()}) [${monthYear}]`,
+          description: `Money In | Historical payment — ${name.trim()} (${finalRegNo}) [${monthYear}]`,
         }).select().single();
 
         if (txErr) {
@@ -229,11 +231,10 @@ function AdmissionsPage() {
           continue; 
         }
 
-        // Insert payment linked to the transaction
         await supabase.from("payments").insert({
           student_id: studentData.id,
           student_name: name.trim(),
-          reg_no: regNo.trim(),
+          reg_no: finalRegNo,
           course,
           level,
           amount_due: baseFee,
@@ -245,7 +246,7 @@ function AdmissionsPage() {
           months_covered: 1,
           status: "paid",
           note: "Backfilled — historical payment prior to system setup",
-          transaction_id: txData.id, // ✅ THE FIX: Links them perfectly!
+          transaction_id: txData.id,
         });
       }
     }
@@ -368,6 +369,11 @@ function AdmissionsPage() {
               <div className="grid gap-2">
                 <Label>Registration No. <span className="text-destructive">*</span></Label>
                 <Input value={regNo} onChange={e => setRegNo(e.target.value)} placeholder="SSL-0001" />
+                <p className="text-[10px] text-muted-foreground">
+                  Auto-generated. If this number was taken by the time you submit
+                  (e.g. someone else just registered), the system will silently
+                  assign the next available one for you.
+                </p>
               </div>
               <div className="grid gap-2 md:col-span-2">
                 <Label>Phone Number</Label>
@@ -397,7 +403,6 @@ function AdmissionsPage() {
                   </SelectContent>
                 </Select>
               </div>
-
               <div className="grid gap-2 md:col-span-2">
                 <Label>Negotiated / Agreed Fee (Optional)</Label>
                 <Input 
@@ -462,7 +467,6 @@ function AdmissionsPage() {
               </p>
             </div>
 
-            {/* NEW: Payment Date Picker */}
             <div className="grid gap-2">
               <Label>Date Cash Was Received</Label>
               <Input 
@@ -590,7 +594,7 @@ function AdmissionsPage() {
   );
 }
 
-// ── Row helper ─────────────────────────────────────────────────────────────
+// ── Row helper ────────────────────────────────────────────────────────────
 function Row({
   label, value, muted, bold, positive, negative,
 }: {

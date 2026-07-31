@@ -261,23 +261,18 @@ function PaymentsPage() {
     };
   }, [payments, otherIncome, students, overdueStudents]);
 
+  // ✅ FIXED: Always add the new months' fees to the existing balance.
+  // No more ignoring the current month's fee when num_months === 1.
   const getNewDue = (f: PaymentForm) => {
     const student = students.find(s => s.id === f.student_id);
     const courseFee = student?.agreed_fee ?? COURSES[f.course]?.fee ?? 0;
-    
-    if (editing) return courseFee * f.num_months;
-    if (f.current_balance > 0 && f.num_months === 1) {
-      return f.current_balance;
-    }
     return f.current_balance + (courseFee * f.num_months);
   };
 
   const selectStudent = (s: Student) => {
     const courseFee = s.agreed_fee ?? COURSES[s.course]?.fee ?? 0;
     const currentBalance = s.balance > 0 ? s.balance : 0;
-    let initialDue = courseFee;
-    if (currentBalance > 0) initialDue = currentBalance;
-
+    
     setForm(f => ({
       ...f,
       student_id: s.id,
@@ -288,7 +283,7 @@ function PaymentsPage() {
       current_balance: currentBalance,
       start_month: currentMonthYear(),
       num_months: 1,
-      amount_due: initialDue,
+      amount_due: getNewDue({ ...f, student_id: s.id, current_balance: currentBalance, num_months: 1 }),
       amount_paid: "",
     }));
     setStudentSearch("");
@@ -302,10 +297,8 @@ function PaymentsPage() {
     if (student) {
       const courseFee = student.agreed_fee ?? COURSES[student.course]?.fee ?? 0;
       const currentBalance = student.balance > 0 ? student.balance : 0;
-      let initialDue = courseFee;
-      if (currentBalance > 0) initialDue = currentBalance;
 
-      setForm({
+      const initialForm = {
         ...emptyForm(),
         student_id: student.id,
         student_name: student.name,
@@ -313,7 +306,11 @@ function PaymentsPage() {
         course: student.course,
         level: student.level,
         current_balance: currentBalance,
-        amount_due: initialDue,
+      };
+
+      setForm({
+        ...initialForm,
+        amount_due: getNewDue({ ...initialForm, num_months: 1 }),
       });
     } else {
       setForm(emptyForm());
@@ -398,11 +395,11 @@ function PaymentsPage() {
         }
       }
 
-      // ✅ 3. AIRTIGHT FIX: Update the student's balance using the Difference Method
+      // 3. AIRTIGHT FIX: Update the student's balance using the Difference Method
       const balanceDiff = paid - editing.amount_paid;
       const { data: currentStudent } = await supabase
         .from("students")
-        .select("balance, last_payment_date") // ✅ FIXED: Added last_payment_date to select
+        .select("balance, last_payment_date")
         .eq("id", form.student_id)
         .single();
       
@@ -476,7 +473,7 @@ function PaymentsPage() {
     }
 
     // 2. AIRTIGHT FIX: Restore the student's balance using the Difference Method
-    const balanceDiff = 0 - deleting.amount_paid; // This is negative, so subtracting it ADDS the money back
+    const balanceDiff = 0 - deleting.amount_paid;
     const { data: currentStudent } = await supabase
       .from("students")
       .select("balance")
@@ -1001,28 +998,49 @@ function PaymentsPage() {
 
             <Separator />
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="grid gap-2">
-                <Label>Total Amount Due (UGX)</Label>
-                <Input type="number" value={form.amount_due} readOnly className="bg-muted font-bold" />
+            {/* ✅ NEW: Visual Math Breakdown + Editable Total Due */}
+            <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Outstanding from before:</span>
+                <span className="font-medium">{formatUGX(form.current_balance)}</span>
               </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Current period fee ({form.num_months} mo):</span>
+                <span className="font-medium">
+                  {formatUGX((students.find(s => s.id === form.student_id)?.agreed_fee ?? COURSES[form.course]?.fee ?? 0) * form.num_months)}
+                </span>
+              </div>
+              <Separator />
               <div className="grid gap-2">
-                <Label>Amount Paid (UGX) <span className="text-destructive">*</span></Label>
-                <Input type="number" value={form.amount_paid} min={0} max={form.amount_due}
-                  onChange={e => setForm(f => ({ ...f, amount_paid: e.target.value }))}
-                  placeholder="0" />
+                <Label className="flex items-center gap-2">
+                  Total Amount Due (UGX)
+                  <span className="text-[10px] font-normal text-muted-foreground">(Editable)</span>
+                </Label>
+                <Input 
+                  type="number" 
+                  value={form.amount_due} 
+                  onChange={e => setForm(f => ({ ...f, amount_due: Number(e.target.value) }))}
+                  className="font-bold text-base" 
+                />
               </div>
             </div>
 
+            <div className="grid gap-2">
+              <Label>Amount Paid (UGX) <span className="text-destructive">*</span></Label>
+              <Input type="number" value={form.amount_paid} min={0} 
+                onChange={e => setForm(f => ({ ...f, amount_paid: e.target.value }))}
+                placeholder="0" />
+            </div>
+
             {form.amount_paid !== "" && (
-              <div className={`flex items-center gap-2 rounded-lg px-4 py-3 text-sm border ${
+              <div className={`flex items-center gap-2 rounded-lg px-4 py-3 text-sm font-medium border ${
                 Number(form.amount_paid) >= form.amount_due
                   ? "bg-green-50 border-green-200 text-green-800 dark:bg-green-950/30 dark:border-green-800 dark:text-green-300"
                   : "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300"
               }`}>
                 {Number(form.amount_paid) >= form.amount_due ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
                 {Number(form.amount_paid) >= form.amount_due 
-                  ? `Full payment — student is covered for ${form.num_months * 30} days!` 
+                  ? `Full payment received!` 
                   : `Balance of ${formatUGX(form.amount_due - Number(form.amount_paid))} will remain on account`}
               </div>
             )}
