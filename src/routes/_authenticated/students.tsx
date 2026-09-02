@@ -3,7 +3,7 @@ import { useMemo, useState, useEffect } from "react";
 import {
   Pencil, GraduationCap, ArrowUpCircle, Plus, Search,
   Trash2, Loader2, Clock, AlertTriangle, CheckCircle2, Info,
-  MoreVertical, ArrowUp, ArrowDown, Download, Calendar, Receipt
+  MoreVertical, ArrowUp, ArrowDown, Download, Calendar, Receipt, Archive, ArchiveRestore
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,7 +57,8 @@ export function formatUGX(amount: number) {
   return `UGX ${amount.toLocaleString("en-UG")}`;
 }
 
-type Status = "active" | "promoted" | "graduated";
+// ✅ UPDATED: Added "archived" status
+type Status = "active" | "promoted" | "graduated" | "archived";
 type Student = {
   id: string;
   name: string;
@@ -89,7 +90,7 @@ type PaymentRecord = {
 };
 
 const statusVariant = (s: Status): "secondary" | "default" | "outline" =>
-  s === "graduated" ? "secondary" : s === "promoted" ? "default" : "outline";
+  s === "graduated" ? "secondary" : s === "archived" ? "outline" : s === "promoted" ? "default" : "outline";
 
 function getTenure(enrolledDate: string | null, createdAt: string) {
   const start = new Date(enrolledDate ?? createdAt);
@@ -109,7 +110,8 @@ function getTenure(enrolledDate: string | null, createdAt: string) {
 }
 
 function NextPaymentInfo({ student }: { student: Student }) {
-  if (student.status === "graduated") return <span className="text-muted-foreground text-xs">—</span>;
+  // ✅ UPDATED: Treat archived students like graduated students for payment info
+  if (student.status === "graduated" || student.status === "archived") return <span className="text-muted-foreground text-xs">—</span>;
   
   let nextDue: Date | null = null;
   if (student.paid_until) {
@@ -199,6 +201,9 @@ function StudentsPage() {
   const [filterMonth, setFilterMonth] = useState<string>("all");
   const [balanceFilter, setBalanceFilter] = useState<string>("all");
   
+  // ✅ NEW: Toggle to show/hide archived students
+  const [showArchived, setShowArchived] = useState(false);
+
   const [sortField, setSortField] = useState<'name' | 'reg_no' | 'balance'>('reg_no');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   
@@ -226,8 +231,10 @@ function StudentsPage() {
 
   useEffect(() => { fetchStudents(); }, []);
 
+  // ✅ UPDATED: Only renumber ACTIVE students, ignore archived ones
   const renumberStudents = async (currentList: Student[]) => {
-    const sorted = [...currentList].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    const activeStudents = currentList.filter(s => s.status !== "archived");
+    const sorted = [...activeStudents].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     await Promise.all(
       sorted.map((student, index) => 
         supabase.from("students").update({ reg_no: `SSL-${String(index + 1).padStart(4, "0")}` }).eq("id", student.id)
@@ -268,7 +275,8 @@ function StudentsPage() {
 
   const overdueStudents = useMemo(() =>
     students.filter(s => {
-      if (s.status === "graduated") return false;
+      // ✅ UPDATED: Exclude archived students from overdue list
+      if (s.status === "graduated" || s.status === "archived") return false;
       let nextDue: Date | null = null;
       if (s.paid_until) nextDue = new Date(s.paid_until);
       else if (s.last_payment_date) {
@@ -285,28 +293,11 @@ function StudentsPage() {
     }), [students]
   );
 
-  const dueSoonStudents = useMemo(() =>
-    students.filter(s => {
-      if (s.status === "graduated") return false;
-      let nextDue: Date | null = null;
-      if (s.paid_until) nextDue = new Date(s.paid_until);
-      else if (s.last_payment_date) {
-        const last = new Date(s.last_payment_date);
-        nextDue = new Date(last);
-        nextDue.setDate(nextDue.getDate() + (s.payment_cycle_days ?? 30));
-      } else {
-        return false; 
-      }
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      nextDue.setHours(0, 0, 0, 0);
-      const days = Math.ceil((nextDue.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-      return days > 0 && days <= 5;
-    }), [students]
-  );
-
   const filtered = useMemo(() => {
     let result = students.filter(s => {
+      // ✅ Hide archived students by default unless toggle is on
+      if (!showArchived && s.status === "archived") return false;
+
       const matchQuery = s.name.toLowerCase().includes(query.toLowerCase()) || s.reg_no.toLowerCase().includes(query.toLowerCase());
       const matchCourse = courseFilter === "all" || s.course === courseFilter;
       const matchLevel = levelFilter === "all" || s.level === levelFilter;
@@ -342,7 +333,7 @@ function StudentsPage() {
       if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
       return 0;
     });
-  }, [students, query, courseFilter, levelFilter, statusFilter, filterYear, filterMonth, balanceFilter, sortField, sortOrder]);
+  }, [students, query, courseFilter, levelFilter, statusFilter, filterYear, filterMonth, balanceFilter, sortField, sortOrder, showArchived]);
 
   const toggleSelectAll = () => {
     if (selectedIds.size === filtered.length && filtered.length > 0) {
@@ -377,6 +368,23 @@ function StudentsPage() {
     const { error } = await supabase.from("students").update({ status: "graduated" }).eq("id", student.id);
     if (error) { toast.error("Graduation failed: " + error.message); return; }
     toast.success(`${student.name} marked as graduated`);
+    fetchStudents();
+  };
+
+  // ✅ NEW: Archive function (Soft Delete)
+  const archiveStudent = async (student: Student) => {
+    if (!confirm(`Are you sure you want to archive ${student.name}? They will be removed from the active list but can be viewed by enabling "Show Archived".`)) return;
+    const { error } = await supabase.from("students").update({ status: "archived" }).eq("id", student.id);
+    if (error) { toast.error("Archive failed: " + error.message); return; }
+    toast.success(`${student.name} archived successfully.`);
+    fetchStudents();
+  };
+
+  // ✅ NEW: Restore function
+  const restoreStudent = async (student: Student) => {
+    const { error } = await supabase.from("students").update({ status: "active" }).eq("id", student.id);
+    if (error) { toast.error("Restore failed: " + error.message); return; }
+    toast.success(`${student.name} restored to active.`);
     fetchStudents();
   };
 
@@ -561,7 +569,13 @@ function StudentsPage() {
             </SelectContent>
           </Select>
           
-          <span className="text-sm text-muted-foreground ml-auto">
+          {/* ✅ NEW: Show Archived Toggle */}
+          <div className="flex items-center gap-2 ml-auto border-l pl-3">
+            <Checkbox id="show-archived" checked={showArchived} onCheckedChange={(v) => setShowArchived(Boolean(v))} />
+            <Label htmlFor="show-archived" className="text-sm cursor-pointer">Show Archived</Label>
+          </div>
+
+          <span className="text-sm text-muted-foreground">
             {filtered.length} student{filtered.length !== 1 ? "s" : ""}
           </span>
         </div>
@@ -597,7 +611,9 @@ function StudentsPage() {
             <TableBody>
               {filtered.map(s => {
                 let rowClass = "";
-                if (s.status !== "graduated") {
+                if (s.status === "archived") {
+                  rowClass = "bg-muted/30";
+                } else if (s.status !== "graduated") {
                   let nextDue: Date | null = null;
                   if (s.paid_until) nextDue = new Date(s.paid_until);
                   else if (s.last_payment_date) {
@@ -645,19 +661,31 @@ function StudentsPage() {
                           <DropdownMenuItem onClick={() => openDetails(s)}>
                             <Info className="h-4 w-4 mr-2" /> View Info
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => promote(s)} disabled={s.status === "graduated"}>
-                            <ArrowUpCircle className="h-4 w-4 mr-2" /> Promote
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => graduate(s)} disabled={s.status === "graduated"}>
-                            <GraduationCap className="h-4 w-4 mr-2" /> Graduate
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => setEditing(s)}>
-                            <Pencil className="h-4 w-4 mr-2" /> Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => setDeleting([s])} className="text-destructive focus:text-destructive">
-                            <Trash2 className="h-4 w-4 mr-2" /> Delete
-                          </DropdownMenuItem>
+                          
+                          {s.status === "archived" ? (
+                            <DropdownMenuItem onClick={() => restoreStudent(s)} className="text-emerald-600 focus:text-emerald-600">
+                              <ArchiveRestore className="h-4 w-4 mr-2" /> Restore to Active
+                            </DropdownMenuItem>
+                          ) : (
+                            <>
+                              <DropdownMenuItem onClick={() => promote(s)} disabled={s.status === "graduated"}>
+                                <ArrowUpCircle className="h-4 w-4 mr-2" /> Promote
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => graduate(s)} disabled={s.status === "graduated"}>
+                                <GraduationCap className="h-4 w-4 mr-2" /> Graduate
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => setEditing(s)}>
+                                <Pencil className="h-4 w-4 mr-2" /> Edit
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => archiveStudent(s)} className="text-amber-600 focus:text-amber-600">
+                                <Archive className="h-4 w-4 mr-2" /> Archive
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => setDeleting([s])} className="text-destructive focus:text-destructive">
+                                <Trash2 className="h-4 w-4 mr-2" /> Delete Permanently
+                              </DropdownMenuItem>
+                            </>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </TableCell>
@@ -669,10 +697,8 @@ function StudentsPage() {
         )}
       </div>
 
-      {/* ✅ UPDATED: Pass onPaymentRecorded callback */}
       <EditDialog student={editing} onClose={() => setEditing(null)} onSave={saveEdit} onPaymentRecorded={fetchStudents} />
 
-      {/* ✅ UPDATED: Student Info Dialog with Exact Payment Periods */}
       <Dialog open={!!viewing} onOpenChange={o => !o && closeDetails()}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{viewing?.name} — Student Details</DialogTitle></DialogHeader>
@@ -743,9 +769,9 @@ function StudentsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Permanently Delete {deleting?.length} Student(s)?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will <strong>completely wipe</strong> {deleting?.length} student record(s) from the database to free up space. 
+              This will <strong>completely wipe</strong> {deleting?.length} student record(s) from the database, including all payment history. 
               <br/><br/>
-              <strong>Note:</strong> The remaining students will automatically be re-numbered (e.g., SSL-0001, SSL-0002) to fill any gaps. This action cannot be undone.
+              <strong>Tip:</strong> If the student simply finished their course or left the school, use <strong>"Archive"</strong> from the actions menu instead. This keeps their historical records safe for end-of-year tracking.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -760,11 +786,8 @@ function StudentsPage() {
   );
 }
 
-// ✅ UPDATED: Edit Dialog with Historical Payment Recording
 function EditDialog({ student, onClose, onSave, onPaymentRecorded }: { student: Student | null; onClose: () => void; onSave: (s: Student) => void; onPaymentRecorded: () => void }) {
   const [draft, setDraft] = useState<Student | null>(null);
-  
-  // Historical Payment State
   const [histDate, setHistDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [histAmount, setHistAmount] = useState("");
   const [histMonths, setHistMonths] = useState(1);
@@ -773,7 +796,6 @@ function EditDialog({ student, onClose, onSave, onPaymentRecorded }: { student: 
 
   useEffect(() => { 
     setDraft(student); 
-    // Reset historical payment fields when dialog opens
     setHistDate(new Date().toISOString().slice(0, 10));
     setHistAmount("");
     setHistMonths(1);
@@ -781,24 +803,17 @@ function EditDialog({ student, onClose, onSave, onPaymentRecorded }: { student: 
   }, [student]);
 
   const projectedDueDate = useMemo(() => {
-    if (draft?.paid_until) {
-      return new Date(draft.paid_until).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-    }
+    if (draft?.paid_until) return new Date(draft.paid_until).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     if (draft?.last_payment_date) {
       const last = new Date(draft.last_payment_date);
-      const days = draft.payment_cycle_days ?? 30;
-      last.setDate(last.getDate() + days);
+      last.setDate(last.getDate() + (draft.payment_cycle_days ?? 30));
       return last.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     }
     return "Not set";
   }, [draft?.last_payment_date, draft?.payment_cycle_days, draft?.paid_until]);
 
-  // ✅ NEW: Function to record a historical payment
   const recordHistoricalPayment = async () => {
-    if (!draft || !histAmount || Number(histAmount) <= 0) {
-      return toast.error("Please enter a valid amount greater than 0");
-    }
-
+    if (!draft || !histAmount || Number(histAmount) <= 0) return toast.error("Please enter a valid amount greater than 0");
     setRecordingPayment(true);
     const amountPaid = Number(histAmount);
     const newBalance = Math.max(0, draft.balance - amountPaid);
@@ -806,53 +821,26 @@ function EditDialog({ student, onClose, onSave, onPaymentRecorded }: { student: 
     const desc = `Money In | Historical payment — ${draft.name} (${draft.reg_no}) [${draft.level}] ${histMonths} month(s)`;
 
     try {
-      // 1. Create Transaction
       const { data: txData, error: txErr } = await supabase.from("transactions").insert({
-        type: "income",
-        amount: amountPaid,
-        date: histDate,
-        description: desc
+        type: "income", amount: amountPaid, date: histDate, description: desc
       }).select().single();
-
       if (txErr) throw txErr;
 
-      // 2. Create Payment Record
       const { error: payErr } = await supabase.from("payments").insert({
-        student_id: draft.id,
-        student_name: draft.name,
-        reg_no: draft.reg_no,
-        course: draft.course,
-        level: draft.level,
-        amount_due: amountPaid, // Simplified for historical
-        amount_paid: amountPaid,
-        balance: newBalance,
-        method: "cash",
-        payment_date: histDate,
-        month_year: monthYear,
-        months_covered: histMonths,
-        status: newBalance === 0 ? "paid" : "partial",
-        note: histNote || "Recorded via Student Edit (Historical)",
-        transaction_id: txData.id
+        student_id: draft.id, student_name: draft.name, reg_no: draft.reg_no, course: draft.course, level: draft.level,
+        amount_due: amountPaid, amount_paid: amountPaid, balance: newBalance, method: "cash", payment_date: histDate,
+        month_year: monthYear, months_covered: histMonths, status: newBalance === 0 ? "paid" : "partial",
+        note: histNote || "Recorded via Student Edit (Historical)", transaction_id: txData.id
       });
-
       if (payErr) throw payErr;
 
-      // 3. Update Student Balance and Last Payment Date
-      const { error: stuErr } = await supabase.from("students").update({
-        balance: newBalance,
-        last_payment_date: histDate
-      }).eq("id", draft.id);
-
+      const { error: stuErr } = await supabase.from("students").update({ balance: newBalance, last_payment_date: histDate }).eq("id", draft.id);
       if (stuErr) throw stuErr;
 
       toast.success(`Successfully recorded payment of ${formatUGX(amountPaid)} for ${histDate}`);
-      
-      // Clear inputs and refresh parent
-      setHistAmount("");
-      setHistNote("");
+      setHistAmount(""); setHistNote("");
       setDraft({ ...draft, balance: newBalance, last_payment_date: histDate });
       onPaymentRecorded();
-
     } catch (err: any) {
       toast.error("Failed to record payment: " + err.message);
     } finally {
@@ -913,50 +901,22 @@ function EditDialog({ student, onClose, onSave, onPaymentRecorded }: { student: 
           <div className="grid gap-2 rounded-lg border border-dashed p-3 bg-muted/30">
             <Label className="text-primary font-medium">Negotiated / Agreed Fee (Optional)</Label>
             <Input type="number" value={draft.agreed_fee || ""} onChange={e => setDraft({ ...draft, agreed_fee: e.target.value ? Number(e.target.value) : null })} placeholder={`Leave blank for standard fee (${formatUGX(standardFee)})`} />
-            <p className="text-[10px] text-muted-foreground">
-              If the student pays a negotiated amount (e.g., 300,000 instead of {formatUGX(standardFee)}), enter it here. 
-              This ensures their balance calculates to 0 when they pay the agreed amount, preventing false debt.
-            </p>
+            <p className="text-[10px] text-muted-foreground">If the student pays a negotiated amount, enter it here to prevent false debt calculations.</p>
           </div>
 
-          {/* ✅ NEW: Record Historical Payment Section */}
           <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/50 dark:bg-emerald-950/20 dark:border-emerald-800 p-4">
             <div className="flex items-center gap-2">
               <Receipt className="h-4 w-4 text-emerald-600" />
               <Label className="text-emerald-800 dark:text-emerald-300 font-bold text-sm">Record a Payment They Already Made</Label>
             </div>
-            <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
-              Use this to backdate a real payment. This will create a transaction in the Accounts ledger and reduce the student's balance.
-            </p>
-            
             <div className="grid grid-cols-2 gap-3">
-              <div className="grid gap-2">
-                <Label className="text-xs">Payment Date</Label>
-                <Input type="date" value={histDate} onChange={e => setHistDate(e.target.value)} className="h-9" />
-              </div>
-              <div className="grid gap-2">
-                <Label className="text-xs">Months Covered</Label>
-                <Input type="number" min="1" value={histMonths} onChange={e => setHistMonths(Number(e.target.value))} className="h-9" />
-              </div>
+              <div className="grid gap-2"><Label className="text-xs">Payment Date</Label><Input type="date" value={histDate} onChange={e => setHistDate(e.target.value)} className="h-9" /></div>
+              <div className="grid gap-2"><Label className="text-xs">Months Covered</Label><Input type="number" min="1" value={histMonths} onChange={e => setHistMonths(Number(e.target.value))} className="h-9" /></div>
             </div>
-
-            <div className="grid gap-2">
-              <Label className="text-xs">Amount Paid (UGX)</Label>
-              <Input type="number" value={histAmount} onChange={e => setHistAmount(e.target.value)} placeholder="e.g. 150000" className="h-9" />
-            </div>
-
-            <div className="grid gap-2">
-              <Label className="text-xs">Note (Optional)</Label>
-              <Input value={histNote} onChange={e => setHistNote(e.target.value)} placeholder="e.g. Paid for March" className="h-9" />
-            </div>
-
-            <Button 
-              onClick={recordHistoricalPayment} 
-              disabled={recordingPayment || !histAmount} 
-              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white h-9"
-            >
-              {recordingPayment ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
-              Record Historical Payment
+            <div className="grid gap-2"><Label className="text-xs">Amount Paid (UGX)</Label><Input type="number" value={histAmount} onChange={e => setHistAmount(e.target.value)} placeholder="e.g. 150000" className="h-9" /></div>
+            <div className="grid gap-2"><Label className="text-xs">Note (Optional)</Label><Input value={histNote} onChange={e => setHistNote(e.target.value)} placeholder="e.g. Paid for March" className="h-9" /></div>
+            <Button onClick={recordHistoricalPayment} disabled={recordingPayment || !histAmount} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white h-9">
+              {recordingPayment ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Plus className="h-4 w-4 mr-2" />} Record Historical Payment
             </Button>
           </div>
 
@@ -976,6 +936,7 @@ function EditDialog({ student, onClose, onSave, onPaymentRecorded }: { student: 
                   <SelectItem value="active">Active</SelectItem>
                   <SelectItem value="promoted">Promoted</SelectItem>
                   <SelectItem value="graduated">Graduated</SelectItem>
+                  <SelectItem value="archived">Archived</SelectItem>
                 </SelectContent>
               </Select>
             </div>

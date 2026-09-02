@@ -183,10 +183,12 @@ function PaymentsPage() {
     }
   };
 
+  // ✅ FIXED: Changed .eq("status", "active") to .in("status", ["active", "promoted"])
+  // so promoted students still appear in the search dropdown to record payments.
   const fetchAll = async () => {
     setLoading(true);
     const [{ data: s }, { data: p }] = await Promise.all([
-      supabase.from("students").select("*").eq("status", "active").order("name"),
+      supabase.from("students").select("*").in("status", ["active", "promoted"]).order("name"),
       supabase.from("payments").select("*").order("payment_date", { ascending: false }),
     ]);
     setStudents((s ?? []) as Student[]);
@@ -262,7 +264,6 @@ function PaymentsPage() {
   }, [payments, otherIncome, students, overdueStudents]);
 
   // ✅ FIXED: Always add the new months' fees to the existing balance.
-  // No more ignoring the current month's fee when num_months === 1.
   const getNewDue = (f: PaymentForm) => {
     const student = students.find(s => s.id === f.student_id);
     const courseFee = student?.agreed_fee ?? COURSES[f.course]?.fee ?? 0;
