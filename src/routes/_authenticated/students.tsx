@@ -57,7 +57,6 @@ export function formatUGX(amount: number) {
   return `UGX ${amount.toLocaleString("en-UG")}`;
 }
 
-// ✅ UPDATED: Added "archived" status
 type Status = "active" | "promoted" | "graduated" | "archived";
 type Student = {
   id: string;
@@ -110,7 +109,6 @@ function getTenure(enrolledDate: string | null, createdAt: string) {
 }
 
 function NextPaymentInfo({ student }: { student: Student }) {
-  // ✅ UPDATED: Treat archived students like graduated students for payment info
   if (student.status === "graduated" || student.status === "archived") return <span className="text-muted-foreground text-xs">—</span>;
   
   let nextDue: Date | null = null;
@@ -201,7 +199,6 @@ function StudentsPage() {
   const [filterMonth, setFilterMonth] = useState<string>("all");
   const [balanceFilter, setBalanceFilter] = useState<string>("all");
   
-  // ✅ NEW: Toggle to show/hide archived students
   const [showArchived, setShowArchived] = useState(false);
 
   const [sortField, setSortField] = useState<'name' | 'reg_no' | 'balance'>('reg_no');
@@ -217,8 +214,8 @@ function StudentsPage() {
 
   useEffect(() => { setQuery(urlSearch); }, [urlSearch]);
 
-  const fetchStudents = async () => {
-    setLoading(true);
+  // ✅ UPDATED: Silent background refresh (does NOT trigger loading spinner or scroll jump)
+  const refreshStudents = async () => {
     const { data, error } = await supabase
       .from("students")
       .select("*")
@@ -226,22 +223,17 @@ function StudentsPage() {
     
     if (error) toast.error("Failed to load students: " + error.message);
     else setStudents((data ?? []) as Student[]);
-    setLoading(false);
   };
 
-  useEffect(() => { fetchStudents(); }, []);
-
-  // ✅ UPDATED: Only renumber ACTIVE students, ignore archived ones
-  const renumberStudents = async (currentList: Student[]) => {
-    const activeStudents = currentList.filter(s => s.status !== "archived");
-    const sorted = [...activeStudents].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    await Promise.all(
-      sorted.map((student, index) => 
-        supabase.from("students").update({ reg_no: `SSL-${String(index + 1).padStart(4, "0")}` }).eq("id", student.id)
-      )
-    );
-    await fetchStudents();
-  };
+  // Initial load keeps the loading spinner
+  useEffect(() => { 
+    const init = async () => {
+      setLoading(true);
+      await refreshStudents();
+      setLoading(false);
+    };
+    init();
+  }, []);
 
   const availableLevels = useMemo(() => {
     if (courseFilter === "all") {
@@ -275,7 +267,6 @@ function StudentsPage() {
 
   const overdueStudents = useMemo(() =>
     students.filter(s => {
-      // ✅ UPDATED: Exclude archived students from overdue list
       if (s.status === "graduated" || s.status === "archived") return false;
       let nextDue: Date | null = null;
       if (s.paid_until) nextDue = new Date(s.paid_until);
@@ -295,7 +286,6 @@ function StudentsPage() {
 
   const filtered = useMemo(() => {
     let result = students.filter(s => {
-      // ✅ Hide archived students by default unless toggle is on
       if (!showArchived && s.status === "archived") return false;
 
       const matchQuery = s.name.toLowerCase().includes(query.toLowerCase()) || s.reg_no.toLowerCase().includes(query.toLowerCase());
@@ -350,6 +340,7 @@ function StudentsPage() {
     setSelectedIds(newSet);
   };
 
+  // ✅ OPTIMISTIC UPDATE: Instant UI feedback, no scroll jump
   const promote = async (student: Student) => {
     const levels = COURSES[student.course]?.levels ?? [];
     const idx = levels.indexOf(student.level);
@@ -358,67 +349,117 @@ function StudentsPage() {
       return;
     }
     const nextLevel = levels[idx + 1];
+    
+    // 1. Update UI instantly
+    setStudents(prev => prev.map(s => s.id === student.id ? { ...s, level: nextLevel, status: "promoted" } : s));
+
+    // 2. Update database in background
     const { error } = await supabase.from("students").update({ level: nextLevel, status: "promoted" }).eq("id", student.id);
-    if (error) { toast.error("Promotion failed: " + error.message); return; }
+    if (error) { 
+      toast.error("Promotion failed: " + error.message); 
+      // Revert on error
+      setStudents(prev => prev.map(s => s.id === student.id ? student : s));
+      return; 
+    }
     toast.success(`${student.name} promoted to ${nextLevel}`);
-    fetchStudents();
   };
 
   const graduate = async (student: Student) => {
+    setStudents(prev => prev.map(s => s.id === student.id ? { ...s, status: "graduated" } : s));
     const { error } = await supabase.from("students").update({ status: "graduated" }).eq("id", student.id);
-    if (error) { toast.error("Graduation failed: " + error.message); return; }
+    if (error) { 
+      toast.error("Graduation failed: " + error.message); 
+      setStudents(prev => prev.map(s => s.id === student.id ? student : s));
+      return; 
+    }
     toast.success(`${student.name} marked as graduated`);
-    fetchStudents();
   };
 
-  // ✅ NEW: Archive function (Soft Delete)
   const archiveStudent = async (student: Student) => {
-    if (!confirm(`Are you sure you want to archive ${student.name}? They will be removed from the active list but can be viewed by enabling "Show Archived".`)) return;
+    if (!confirm(`Are you sure you want to archive ${student.name}? They will be removed from the active list.`)) return;
+    setStudents(prev => prev.map(s => s.id === student.id ? { ...s, status: "archived" } : s));
     const { error } = await supabase.from("students").update({ status: "archived" }).eq("id", student.id);
-    if (error) { toast.error("Archive failed: " + error.message); return; }
+    if (error) { 
+      toast.error("Archive failed: " + error.message); 
+      setStudents(prev => prev.map(s => s.id === student.id ? student : s));
+      return; 
+    }
     toast.success(`${student.name} archived successfully.`);
-    fetchStudents();
   };
 
-  // ✅ NEW: Restore function
   const restoreStudent = async (student: Student) => {
+    setStudents(prev => prev.map(s => s.id === student.id ? { ...s, status: "active" } : s));
     const { error } = await supabase.from("students").update({ status: "active" }).eq("id", student.id);
-    if (error) { toast.error("Restore failed: " + error.message); return; }
+    if (error) { 
+      toast.error("Restore failed: " + error.message); 
+      setStudents(prev => prev.map(s => s.id === student.id ? student : s));
+      return; 
+    }
     toast.success(`${student.name} restored to active.`);
-    fetchStudents();
   };
 
   const saveEdit = async (updated: Student) => {
+    // 1. Update UI and close dialog instantly
+    setStudents(prev => prev.map(s => s.id === updated.id ? updated : s));
+    setEditing(null);
+    
+    // 2. Update database in background
     const { error } = await supabase.from("students").update({
-      name: updated.name,
-      reg_no: updated.reg_no,
-      course: updated.course,
-      level: updated.level,
-      status: updated.status,
-      balance: updated.balance,
-      payment_cycle_days: updated.payment_cycle_days,
-      last_payment_date: updated.last_payment_date,
-      paid_until: updated.paid_until,
-      enrolled_date: updated.enrolled_date,
-      agreed_fee: updated.agreed_fee,
+      name: updated.name, reg_no: updated.reg_no, course: updated.course, level: updated.level,
+      status: updated.status, balance: updated.balance, payment_cycle_days: updated.payment_cycle_days,
+      last_payment_date: updated.last_payment_date, paid_until: updated.paid_until,
+      enrolled_date: updated.enrolled_date, agreed_fee: updated.agreed_fee,
     }).eq("id", updated.id);
     
-    if (error) { toast.error("Update failed: " + error.message); return; }
+    if (error) { 
+      toast.error("Update failed: " + error.message); 
+      refreshStudents(); // Fallback to silent refetch if it fails
+      return; 
+    }
     toast.success("Student updated");
-    setEditing(null);
-    fetchStudents();
   };
 
   const confirmDelete = async () => {
     if (!deleting || deleting.length === 0) return;
     const idsToDelete = deleting.map(s => s.id);
-    const { error } = await supabase.from("students").delete().in("id", idsToDelete);
-    if (error) { toast.error("Delete failed: " + error.message); return; }
-    toast.success(`${deleting.length} student(s) permanently removed.`);
+    const deletedCount = deleting.length;
+    
+    // 1. Instant UI update: remove deleted students
+    const previousStudents = students;
+    setStudents(prev => prev.filter(s => !idsToDelete.includes(s.id)));
     setDeleting(null);
     setSelectedIds(new Set());
-    const remainingStudents = students.filter(s => !idsToDelete.includes(s.id));
-    await renumberStudents(remainingStudents);
+    
+    // 2. Database delete
+    const { error } = await supabase.from("students").delete().in("id", idsToDelete);
+    if (error) { 
+      toast.error("Delete failed: " + error.message); 
+      setStudents(previousStudents); // Revert on error
+      return; 
+    }
+    toast.success(`${deletedCount} student(s) permanently removed.`);
+    
+    // 3. Background renumbering (instant UI update + background DB sync, NO scroll jump)
+    const remainingActive = previousStudents.filter(s => !idsToDelete.includes(s.id) && s.status !== "archived");
+    const sorted = [...remainingActive].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    
+    const newRegNos = new Map();
+    sorted.forEach((s, idx) => {
+      newRegNos.set(s.id, `SSL-${String(idx + 1).padStart(4, "0")}`);
+    });
+    
+    // Update local state instantly with new reg numbers
+    setStudents(prev => prev.map(s => {
+      const newRegNo = newRegNos.get(s.id);
+      return newRegNo ? { ...s, reg_no: newRegNo } : s;
+    }));
+
+    // Update database in background
+    await Promise.all(
+      sorted.map((s, idx) => 
+        supabase.from("students").update({ reg_no: `SSL-${String(idx + 1).padStart(4, "0")}` }).eq("id", s.id)
+      )
+    );
   };
 
   const openDetails = async (student: Student) => {
@@ -569,7 +610,6 @@ function StudentsPage() {
             </SelectContent>
           </Select>
           
-          {/* ✅ NEW: Show Archived Toggle */}
           <div className="flex items-center gap-2 ml-auto border-l pl-3">
             <Checkbox id="show-archived" checked={showArchived} onCheckedChange={(v) => setShowArchived(Boolean(v))} />
             <Label htmlFor="show-archived" className="text-sm cursor-pointer">Show Archived</Label>
@@ -697,7 +737,8 @@ function StudentsPage() {
         )}
       </div>
 
-      <EditDialog student={editing} onClose={() => setEditing(null)} onSave={saveEdit} onPaymentRecorded={fetchStudents} />
+      {/* ✅ UPDATED: Pass refreshStudents instead of fetchStudents to prevent scroll jumps */}
+      <EditDialog student={editing} onClose={() => setEditing(null)} onSave={saveEdit} onPaymentRecorded={refreshStudents} />
 
       <Dialog open={!!viewing} onOpenChange={o => !o && closeDetails()}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
@@ -840,7 +881,7 @@ function EditDialog({ student, onClose, onSave, onPaymentRecorded }: { student: 
       toast.success(`Successfully recorded payment of ${formatUGX(amountPaid)} for ${histDate}`);
       setHistAmount(""); setHistNote("");
       setDraft({ ...draft, balance: newBalance, last_payment_date: histDate });
-      onPaymentRecorded();
+      onPaymentRecorded(); // This now calls refreshStudents (silent, no scroll jump)
     } catch (err: any) {
       toast.error("Failed to record payment: " + err.message);
     } finally {

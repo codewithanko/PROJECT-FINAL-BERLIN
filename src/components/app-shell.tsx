@@ -4,7 +4,7 @@ import {
   LayoutGrid, Users, UserPlus, Wallet, BarChart3, FileText,
   ClipboardEdit, CalendarCheck, GraduationCap, Settings,
   UserCog, LogOut, Bell, Search, Moon, Sun, ChevronLeft, ChevronRight, Sparkles,
-  Loader2, User, MessageSquare, Briefcase, Upload, CalendarDays, // Added CalendarDays icon
+  Loader2, User, MessageSquare, Briefcase, Upload, CalendarDays,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
@@ -27,14 +27,13 @@ const mainItems = [
   { label: "Reports", icon: FileText, to: "/reports" },
   { label: "Marks Assessment", icon: ClipboardEdit, to: "/marks" },
   { label: "Attendance", icon: CalendarCheck, to: "/attendance" },
-  { label: "Calendar", icon: CalendarDays, to: "/calendar" }, // ADDED CALENDAR LINK
+  { label: "Calendar", icon: CalendarDays, to: "/calendar" },
   { label: "Graduates", icon: GraduationCap, to: "/graduates" },
   { label: "AI Assistant", icon: Sparkles, to: "/assistant" },
   { label: "Import Students", icon: Upload, to: "/import-students" },
   { label: "Import Accounts", icon: Upload, to: "/import-accounts" },
 ] as const;
 
-// UNTOUCHED: Your old Staff Accounts page stays right here!
 const adminItems = [
   { label: "Staff Accounts", icon: UserCog, to: "/staff" },
   { label: "Settings", icon: Settings, to: "/settings" },
@@ -105,7 +104,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="min-h-screen flex w-full bg-background">
       <aside className={cn("fixed inset-y-0 left-0 z-30 flex flex-col bg-sidebar text-sidebar-foreground transition-all duration-300 ease-in-out", collapsed ? "w-20" : "w-64")}>
         <div className="flex items-center gap-3 px-4 h-20 border-b border-white/5">
-          <div className={cn("shrink-0 rounded-xl bg-white/15 flex items-center justify-center font-bold text-sidebar-foreground tracking-tight transition-all", collapsed ? "h-10 w-10 text-sm" : "h-12 w-12 text-base")}>SS</div>
+          {/* ✅ UPDATED: Replaced "SS" text with actual logo image */}
+          <div className={cn("shrink-0 rounded-xl bg-white/15 flex items-center justify-center overflow-hidden transition-all", collapsed ? "h-10 w-10 p-0" : "h-12 w-12 p-0")}>
+  <img src="/images/logo.png" alt="Sandstone School Logo" className="w-full h-full object-cover" />
+</div>
+          
           {!collapsed && (
             <div className="overflow-hidden">
               <p className="font-semibold leading-tight text-sm truncate">Sandstone School</p>

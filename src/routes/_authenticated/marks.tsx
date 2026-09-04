@@ -28,7 +28,6 @@ const COURSES: Record<string, { label: string; levels: string[] }> = {
   private_class_2: { label: "Private Class 2", levels: ["Private"] },
 };
 
-// ✅ NEW: Academic year structure — 6 terms per year (6 × 8 weeks = 48 weeks)
 const TERMS_PER_YEAR = 6;
 const WEEKS_PER_TERM = 8;
 
@@ -52,12 +51,10 @@ function MarksPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // ✅ NEW: Editable Term & Year Filters (defaults to current year/term)
   const currentYear = new Date().getFullYear();
   const [selectedYear, setSelectedYear] = useState<number>(currentYear);
   const [selectedTerm, setSelectedTerm] = useState<number>(1);
 
-  // ✅ NEW: Generate year range (current year ± 2 years for easy navigation)
   const availableYears = useMemo(() => {
     const years: number[] = [];
     for (let y = currentYear - 2; y <= currentYear + 2; y++) {
@@ -66,7 +63,6 @@ function MarksPage() {
     return years;
   }, []);
 
-  // ✅ NEW: Generate term options (Term 1 through Term 6)
   const availableTerms = useMemo(() => {
     return Array.from({ length: TERMS_PER_YEAR }, (_, i) => i + 1);
   }, []);
@@ -129,7 +125,7 @@ function MarksPage() {
     });
   };
 
-  // ── Save to Supabase (Includes Selected Term & Year) ──────────────────
+  // ✅ EFFICIENCY FIX: Save to Supabase WITHOUT triggering a full page reload/loading spinner
   const saveMarks = async (studentId: string) => {
     setSavingId(studentId);
     const record = marksMap[studentId];
@@ -139,30 +135,58 @@ function MarksPage() {
       student_id: studentId,
       term: selectedTerm,
       year: selectedYear,
-      week_1: record.week_1 || 0, week_2: record.week_2 || 0, week_3: record.week_3 || 0, week_4: record.week_4 || 0,
-      week_5: record.week_5 || 0, week_6: record.week_6 || 0, week_7: record.week_7 || 0, week_8: record.week_8 || 0,
+      week_1: record.week_1 ?? 0, week_2: record.week_2 ?? 0, week_3: record.week_3 ?? 0, week_4: record.week_4 ?? 0,
+      week_5: record.week_5 ?? 0, week_6: record.week_6 ?? 0, week_7: record.week_7 ?? 0, week_8: record.week_8 ?? 0,
       remarks: record.remarks || "",
     };
 
-    const { error } = record.id 
-      ? await supabase.from("marks").update(payload).eq("id", record.id)
-      : await supabase.from("marks").insert(payload);
+    let savedRecord: MarkRecord | null = null;
 
-    if (error) {
-      toast.error("Failed to save marks: " + error.message);
+    if (record.id) {
+      const { error, data } = await supabase
+        .from("marks")
+        .update(payload)
+        .eq("id", record.id)
+        .select()
+        .single();
+      
+      if (error) {
+        toast.error("Failed to save marks: " + error.message);
+      } else {
+        toast.success("Marks saved successfully");
+        savedRecord = data as MarkRecord;
+      }
     } else {
-      toast.success("Marks saved successfully");
-      fetchData(); 
+      const { error, data } = await supabase
+        .from("marks")
+        .insert(payload)
+        .select()
+        .single();
+      
+      if (error) {
+        toast.error("Failed to save marks: " + error.message);
+      } else {
+        toast.success("Marks saved successfully");
+        savedRecord = data as MarkRecord;
+      }
     }
+
+    // ✅ Update local state directly with the saved record (including the new ID)
+    // This prevents the entire table from showing a loading spinner on every save.
+    if (savedRecord) {
+      setMarksMap(prev => ({
+        ...prev,
+        [studentId]: savedRecord
+      }));
+    }
+
     setSavingId(null);
   };
 
-  // ✅ UPDATED: Advance to Next Term (now works with selected filters)
   const handleAdvanceTerm = () => {
     if (!confirm(`Advance from Term ${selectedTerm}, ${selectedYear} to the next term? All records for the current term are safely preserved in the system.`)) return;
     
     if (selectedTerm >= TERMS_PER_YEAR) {
-      // Roll over to Term 1 of next year
       setSelectedTerm(1);
       setSelectedYear(prev => prev + 1);
       toast.success(`Academic Year Complete! Advanced to Term 1, ${selectedYear + 1}`);
@@ -172,7 +196,6 @@ function MarksPage() {
     }
   };
 
-  // ✅ UPDATED: Export Backup (uses selected term/year in filename)
   const exportTermBackup = () => {
     if (students.length === 0) return toast.error("No students in this class to export");
     
@@ -210,7 +233,6 @@ function MarksPage() {
     toast.success(`Term ${selectedTerm}, ${selectedYear} records backed up to Excel!`);
   };
 
-  // ── Calculations ─────────────────────────────────────────────────────
   const getAvg = (m: MarkRecord | undefined) => {
     if (!m) return null;
     const weeks = [m.week_1, m.week_2, m.week_3, m.week_4, m.week_5, m.week_6, m.week_7, m.week_8].filter((w): w is number => w !== null && w !== 0);
@@ -262,9 +284,7 @@ function MarksPage() {
         </div>
       )}
 
-      {/* ✅ NEW: Class, Academic Period & Search Filters */}
       <div className="rounded-2xl border bg-card p-4 flex flex-wrap items-center gap-4">
-        {/* Course & Level */}
         <div className="flex gap-3 flex-1 min-w-[300px]">
           <Select value={selectedCourse} onValueChange={handleCourseChange}>
             <SelectTrigger className="w-[200px]"> <SelectValue /> </SelectTrigger>
@@ -284,7 +304,6 @@ function MarksPage() {
           </Select>
         </div>
 
-        {/* ✅ NEW: Academic Period Filters (Year & Term) */}
         <div className="flex items-center gap-2 bg-muted/50 px-4 py-2 rounded-lg border">
           <Calendar className="h-4 w-4 text-primary" />
           <div className="flex items-center gap-2">
@@ -320,7 +339,6 @@ function MarksPage() {
           </Button>
         </div>
 
-        {/* Search */}
         <div className="relative flex-1 min-w-[220px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input 
@@ -331,7 +349,6 @@ function MarksPage() {
           />
         </div>
         
-        {/* Count & Export */}
         <div className="flex items-center gap-2 ml-auto">
           <Badge variant="outline">
             {filteredStudents.length} student{filteredStudents.length !== 1 ? "s" : ""}
@@ -342,7 +359,6 @@ function MarksPage() {
         </div>
       </div>
 
-      {/* ✅ NEW: Info Banner about Selected Period */}
       <div className="rounded-xl bg-primary/5 border border-primary/20 p-4 flex items-center gap-3">
         <Calendar className="h-5 w-5 text-primary shrink-0" />
         <div className="flex-1">
@@ -355,7 +371,6 @@ function MarksPage() {
         </div>
       </div>
 
-      {/* Table */}
       <div className="rounded-2xl border bg-card overflow-x-auto">
         {loading ? (
           <div className="flex items-center justify-center py-20 gap-2 text-muted-foreground">
