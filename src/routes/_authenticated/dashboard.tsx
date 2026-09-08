@@ -273,13 +273,18 @@ function Dashboard() {
 
   return (
     <div className="space-y-8">
-      <header className="flex items-center gap-5">
-        <div className="h-16 w-16 shrink-0 rounded-2xl bg-primary/10 flex items-center justify-center text-primary drop-shadow-sm">
-          <GraduationCap className="h-8 w-8" />
-        </div>
+      {/* ✅ OPTION 1: CLEAN & MODERN HEADER */}
+      <header className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-2 border-b border-border/50">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground mt-1">Welcome back to Sandstone School Management</p>
+          <p className="text-sm font-medium text-muted-foreground mb-1">
+            {new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening"}
+          </p>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">Dashboard Overview</h1>
+          <p className="text-muted-foreground mt-1">Here is what is happening at Sandstone School today.</p>
+        </div>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full border">
+          <CalendarDays className="h-4 w-4" />
+          <span>{new Date().toLocaleDateString('en-UG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
         </div>
       </header>
 
@@ -528,34 +533,47 @@ function Dashboard() {
   );
 }
 
-// ✅ Stat Card Component — WITH SUPER POWERFUL HOVER EFFECTS
 function StatCard({ stat, onClick }: { stat: Stat; onClick: () => void }) {
   const Icon = stat.icon;
   const TrendIcon = stat.trend.dir === "up" ? ArrowUp : ArrowDown;
+  
   return (
     <div 
       onClick={onClick}
-      className="group rounded-2xl bg-card border-2 border-transparent p-6 cursor-pointer transition-all duration-500 ease-out hover:shadow-2xl hover:-translate-y-2 hover:bg-primary/5 hover:border-primary hover:scale-[1.02] active:scale-[0.98]"
+      className="group relative rounded-2xl border border-border bg-card p-6 cursor-pointer transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg hover:border-primary/50 hover:bg-blue-50 dark:hover:bg-blue-950/30 active:scale-[0.98]"
     >
-      <div className="flex items-start justify-between">
-        <p className="text-sm text-muted-foreground font-medium">{stat.title}</p>
-        <div className={cn("h-12 w-12 rounded-xl flex items-center justify-center transition-all duration-500 ease-out group-hover:scale-125 group-hover:rotate-6 group-hover:shadow-lg", stat.tint)}>
+      <div className="relative flex items-start justify-between z-10">
+        <p className="text-sm text-muted-foreground font-medium group-hover:text-foreground transition-colors">
+          {stat.title}
+        </p>
+        <div className={cn(
+          "h-12 w-12 rounded-xl flex items-center justify-center transition-all duration-300 group-hover:scale-110 group-hover:shadow-md", 
+          stat.tint
+        )}>
           <Icon className="h-6 w-6" />
         </div>
       </div>
-      <p className="mt-4 text-2xl font-bold tracking-tight">{stat.value}</p>
-      <div className="mt-4 flex items-center gap-1.5 text-xs">
-        <span className={cn("inline-flex items-center gap-0.5 font-semibold transition-colors duration-300 group-hover:text-primary", stat.trend.dir === "up" ? "text-emerald-600" : "text-rose-600")}>
-          <TrendIcon className="h-3 w-3" />
+      
+      <p className="relative mt-4 text-2xl font-bold tracking-tight z-10 group-hover:text-primary transition-colors">
+        {stat.value}
+      </p>
+      
+      <div className="relative mt-4 flex items-center gap-1.5 text-xs z-10">
+        <span className={cn(
+          "inline-flex items-center gap-0.5 font-semibold transition-colors", 
+          stat.trend.dir === "up" ? "text-emerald-600 group-hover:text-emerald-500" : "text-rose-600 group-hover:text-rose-500"
+        )}>
+          <TrendIcon className="h-3 w-3 group-hover:-translate-y-0.5 transition-transform" />
           {stat.trend.value}
         </span>
-        <span className="text-muted-foreground">{stat.trend.label}</span>
+        <span className="text-muted-foreground group-hover:text-foreground/80 transition-colors">
+          {stat.trend.label}
+        </span>
       </div>
     </div>
   );
 }
 
-// ✅ SECURE: Password Reset Requests Widget (Checks for username in email or metadata)
 function PasswordResetRequestsWidget() {
   const [requests, setRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -565,8 +583,6 @@ function PasswordResetRequestsWidget() {
     const checkAdminAndFetch = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       
-      // ✅ BULLETPROOF CHECK: Checks if the email contains your username, 
-      // OR if the raw username metadata matches exactly.
       const isAdmin = user?.email?.includes("ankotrip1@gmail.com") || user?.user_metadata?.username === "ankotrip1@gmail.com";
       setIsSuperAdmin(!!isAdmin);
 
@@ -593,7 +609,6 @@ function PasswordResetRequestsWidget() {
       
     if (!error) {
       toast.success("Marked as resolved");
-      // Refresh the list
       const { data } = await supabase
         .from("password_reset_requests")
         .select("*")
@@ -603,14 +618,13 @@ function PasswordResetRequestsWidget() {
     }
   };
 
-  // ✅ If not the super admin, render absolutely nothing
   if (!isSuperAdmin) return null;
   if (loading) return (
     <div className="flex items-center gap-2 text-sm text-muted-foreground p-4">
       <Loader2 className="h-4 w-4 animate-spin" /> Loading admin requests...
     </div>
   );
-  if (requests.length === 0) return null; // Hides the widget completely if there are no pending requests
+  if (requests.length === 0) return null;
 
   return (
     <Card className="border-amber-200 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-800">

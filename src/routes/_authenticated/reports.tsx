@@ -54,7 +54,6 @@ function ReportsPage() {
   const [exporting, setExporting] = useState(false);
   const [financeView, setFinanceView] = useState<"all" | "income" | "expense">("all");
   
-  // ✅ NEW: Finance Date Filters
   const [reportYear, setReportYear] = useState<string>("all");
   const [reportMonth, setReportMonth] = useState<string>("all");
 
@@ -77,7 +76,10 @@ function ReportsPage() {
       // 1. Fetch Students
       const { data: studentsData } = await supabase.from("students").select("*");
       if (studentsData) {
-        const sRows = studentsData.map(s => ({
+        // ✅ NEW: Filter out "archived" students for active operational reports
+        const activeStudents = studentsData.filter(s => s.status !== "archived");
+
+        const sRows = activeStudents.map(s => ({
           name: s.name || "N/A", 
           reg: s.reg_no || "N/A",
           course: COURSES[s.course]?.label || s.course || "Unknown",
@@ -86,7 +88,7 @@ function ReportsPage() {
         }));
         setStudentRows(sRows);
 
-        // ✅ NEW: Top 5 Debtors
+        // ✅ NEW: Top 5 Debtors now only checks active/promoted students
         const debtors = [...sRows]
           .filter(s => s.balance > 0)
           .sort((a, b) => b.balance - a.balance)
@@ -94,14 +96,15 @@ function ReportsPage() {
         setTopDebtors(debtors);
 
         const courseCounts: Record<string, number> = {};
-        studentsData.forEach(s => {
+        activeStudents.forEach(s => {
           const label = COURSES[s.course]?.label || s.course || "Unknown";
           courseCounts[label] = (courseCounts[label] || 0) + 1;
         });
         setStudentsByCourse(Object.entries(courseCounts).map(([course, students]) => ({ course, students })));
 
+        // Graduation logic remains accurate using the full dataset
         const graduatedCount = studentsData.filter(s => s.status === "graduated").length;
-        const activeCount = studentsData.filter(s => s.status === "active" || s.status === "promoted").length;
+        const activeCount = activeStudents.filter(s => s.status === "active" || s.status === "promoted").length;
         setGraduationRows([{ year: "Current", intake: activeCount + graduatedCount, graduated: graduatedCount }]);
       }
 
@@ -137,7 +140,6 @@ function ReportsPage() {
     fetchData();
   }, []);
 
-  // ✅ NEW: Process finance data with optional year/month filtering
   const processFinanceData = (transData: any[]) => {
     const monthly: Record<string, { income: number; expenses: number }> = {};
     const categories: Record<string, number> = {};
@@ -148,7 +150,6 @@ function ReportsPage() {
       const tMonth = String(date.getMonth() + 1).padStart(2, "0");
       const monthKey = date.toLocaleString("default", { month: "short" });
 
-      // Apply filters
       if (reportYear !== "all" && tYear !== reportYear) return;
       if (reportMonth !== "all" && tMonth !== reportMonth) return;
 
@@ -172,7 +173,6 @@ function ReportsPage() {
     setExpenseCategories(Object.entries(categories).map(([name, value]) => ({ name, value })));
   };
 
-  // Re-process finance data when filters change
   useEffect(() => {
     const reFetch = async () => {
       const { data: transData } = await supabase.from("transactions").select("*");
@@ -181,7 +181,6 @@ function ReportsPage() {
     reFetch();
   }, [reportYear, reportMonth]);
 
-  // ✅ KEPT ORIGINAL: Professional .doc Export (as you requested)
   async function exportDocx() {
     setExporting(true);
     try {
@@ -239,7 +238,6 @@ function ReportsPage() {
         </Button>
       </header>
 
-      {/* ─ REPORT TABS ── */}
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-5">
         {actions.map((a) => {
           const Icon = a.icon;
@@ -271,7 +269,6 @@ function ReportsPage() {
               <h2 className="font-semibold text-lg">{current.label} — Visual Summary</h2>
             </div>
             
-            {/* ✅ NEW: Finance Filters */}
             {selected === "finance" && (
               <div className="flex items-center gap-2">
                 <Calendar className="h-4 w-4 text-muted-foreground" />
@@ -316,9 +313,7 @@ function ReportsPage() {
   );
 }
 
-// ── Chart Component (With Sub-Reports) ──────────────────────────────────────
 function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories, graduationRows, staffPayroll, financeView, setFinanceView, topDebtors }: any) {
-  
   if (kind === "finance") {
     return (
       <div className="space-y-6">
@@ -377,7 +372,6 @@ function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories
   if (kind === "students") {
     return (
       <div className="space-y-6">
-        {/* ✅ NEW: Top Debtors Mini-Card */}
         {topDebtors.length > 0 && (
           <div className="rounded-xl border border-amber-200 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-800 p-4">
             <div className="flex items-center gap-2 mb-3">
@@ -457,7 +451,6 @@ function ReportChart({ kind, studentsByCourse, financeMonthly, expenseCategories
   );
 }
 
-// ── Table Component ─────────────────────────────────────────────────────────
 function ReportTable({ kind, studentRows, financeRows, academicRows, graduationRows, staffPayroll }: any) {
   const { head, rows } = getTableData(kind, studentRows, financeRows, academicRows, graduationRows, staffPayroll);
   return (
@@ -480,7 +473,6 @@ function ReportTable({ kind, studentRows, financeRows, academicRows, graduationR
   );
 }
 
-// ── Data Mappers ────────────────────────────────────────────────────────────
 function getTableData(kind: string, studentRows: any[], financeRows: any[], academicRows: any[], graduationRows: any[], staffPayroll: any[]) {
   if (kind === "students") return {
     head: ["Name", "Reg No.", "Course", "Status", "Balance"],

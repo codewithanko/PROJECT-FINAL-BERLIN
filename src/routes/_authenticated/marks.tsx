@@ -3,10 +3,10 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { Trophy, Search, Save, Loader2, GraduationCap, Download, ArrowRightCircle, Calendar } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import * as XLSX from "xlsx";
@@ -31,7 +31,8 @@ const COURSES: Record<string, { label: string; levels: string[] }> = {
 const TERMS_PER_YEAR = 6;
 const WEEKS_PER_TERM = 8;
 
-type Student = { id: string; name: string; reg_no: string; course: string; level: string; };
+// ✅ UPDATED: Added 'status' to match Students page features
+type Student = { id: string; name: string; reg_no: string; course: string; level: string; status: string; };
 type MarkRecord = {
   id?: string;
   student_id: string;
@@ -71,12 +72,13 @@ function MarksPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     
+    // ✅ UPDATED: Explicitly fetch 'status' and use .in() for active/promoted students
     const { data: studs } = await supabase
       .from("students")
-      .select("id, name, reg_no, course, level")
+      .select("id, name, reg_no, course, level, status")
       .eq("course", selectedCourse)
       .eq("level", selectedLevel)
-      .neq("status", "graduated")
+      .in("status", ["active", "promoted"]) 
       .order("name");
     setStudents((studs || []) as Student[]);
 
@@ -171,8 +173,6 @@ function MarksPage() {
       }
     }
 
-    // ✅ Update local state directly with the saved record (including the new ID)
-    // This prevents the entire table from showing a loading spinner on every save.
     if (savedRecord) {
       setMarksMap(prev => ({
         ...prev,
@@ -195,7 +195,7 @@ function MarksPage() {
       toast.success(`Advanced to Term ${selectedTerm + 1}, ${selectedYear}`);
     }
   };
-
+ 
   const exportTermBackup = () => {
     if (students.length === 0) return toast.error("No students in this class to export");
     
@@ -405,10 +405,23 @@ function MarksPage() {
 
                 return (
                   <tr key={s.id} className="border-t transition-all duration-200 hover:bg-accent/50">
-                    <td className="px-4 py-3 font-medium sticky left-0 bg-card z-10 border-r">
-                      <div>{s.name}</div>
-                      <div className="text-xs text-muted-foreground font-normal">{s.reg_no}</div>
-                    </td>
+                    {/* ✅ UPDATED: Added visual "Promoted" badge to match Students page */}
+                   <td className="px-4 py-3 font-medium sticky left-0 bg-card z-10 border-r">
+  <div className="leading-tight">
+    <div className="truncate font-semibold">{s.name}</div>
+    <div className="text-[11px] text-muted-foreground font-normal font-mono mt-0.5">
+      {s.reg_no}
+    </div>
+    {s.status === "promoted" && (
+      <div className="mt-1">
+        <span className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">
+          <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+          Promoted
+        </span>
+      </div>
+    )}
+  </div>
+</td>
                     {Array.from({ length: WEEKS_PER_TERM }).map((_, i) => {
                       const w = i + 1;
                       return (

@@ -112,30 +112,56 @@ function AttendancePage() {
     });
   }, [students, attendanceMap, query, filterCourse, filterStatus]);
 
-  // ── Actions ───────────────────────────────────────────────────────────────
+  // ✅ OPTIMISTIC UPDATE: Save to DB and update local state instantly WITHOUT refreshing the whole page
   const markStatus = async (studentId: string, status: "present" | "absent" | "late") => {
     setSavingId(studentId);
     const existing = attendanceMap[studentId];
     
+    let success = false;
+
     if (existing) {
       // Update existing record
-      const { error } = await supabase
+      const { error, data } = await supabase
         .from("attendance")
         .update({ status })
-        .eq("id", existing.id);
-      if (error) toast.error("Failed to update: " + error.message);
-      else toast.success(`Marked as ${status}`);
+        .eq("id", existing.id)
+        .select()
+        .single();
+        
+      if (error) {
+        toast.error("Failed to update: " + error.message);
+      } else {
+        toast.success(`Marked as ${status}`);
+        success = true;
+        // Instantly update local state so UI reflects change without reload
+        setAttendanceMap(prev => ({
+          ...prev,
+          [studentId]: data as AttendanceRecord
+        }));
+      }
     } else {
       // Insert new record
-      const { error } = await supabase
+      const { error, data } = await supabase
         .from("attendance")
-        .insert({ student_id: studentId, date: selectedDate, status });
-      if (error) toast.error("Failed to save: " + error.message);
-      else toast.success(`Marked as ${status}`);
+        .insert({ student_id: studentId, date: selectedDate, status })
+        .select()
+        .single();
+        
+      if (error) {
+        toast.error("Failed to save: " + error.message);
+      } else {
+        toast.success(`Marked as ${status}`);
+        success = true;
+        // Instantly update local state so UI reflects change without reload
+        setAttendanceMap(prev => ({
+          ...prev,
+          [studentId]: data as AttendanceRecord
+        }));
+      }
     }
     
     setSavingId(null);
-    fetchData(); // Refresh data
+    // REMOVED: fetchData() to prevent scroll jumps and loading spinners
   };
 
   return (
@@ -143,7 +169,7 @@ function AttendancePage() {
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Attendance</h1>
-          <p className="text-muted-foreground mt-1">Track daily student attendance (Auto-synced with Students panel)</p>
+          <p className="text-muted-foreground mt-1">Track the daily student attendance</p>
         </div>
         <Button variant="outline" size="sm" onClick={fetchData}>
           <Loader2 className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} /> Refresh
@@ -154,10 +180,10 @@ function AttendancePage() {
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
         {[
           { label: "Total Students", value: stats.total, color: "text-foreground" },
-          { label: "Present", value: stats.present, color: "text-success" },
+          { label: "Present", value: stats.present, color: "text-emerald-600" },
           { label: "Absent", value: stats.absent, color: "text-destructive" },
-          { label: "Late", value: stats.late, color: "text-warning-foreground" },
-          { label: "Attendance Rate", value: `${stats.rate}%`, color: stats.rate >= 80 ? "text-success" : "text-destructive" },
+          { label: "Late", value: stats.late, color: "text-amber-600" },
+          { label: "Attendance Rate", value: `${stats.rate}%`, color: stats.rate >= 80 ? "text-emerald-600" : "text-destructive" },
         ].map(s => (
           <div key={s.label} className="rounded-2xl border bg-card p-4">
             <p className="text-sm text-muted-foreground">{s.label}</p>
@@ -259,7 +285,7 @@ function AttendancePage() {
                         size="sm" variant="ghost" 
                         onClick={() => markStatus(s.id, "present")} 
                         disabled={savingId === s.id || currentStatus === "present"}
-                        className={currentStatus === "present" ? "bg-success/10 text-success" : ""}
+                        className={currentStatus === "present" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" : ""}
                       >
                         {savingId === s.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                       </Button>
@@ -267,7 +293,7 @@ function AttendancePage() {
                         size="sm" variant="ghost" 
                         onClick={() => markStatus(s.id, "late")} 
                         disabled={savingId === s.id || currentStatus === "late"}
-                        className={currentStatus === "late" ? "bg-warning/10 text-warning-foreground" : ""}
+                        className={currentStatus === "late" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" : ""}
                       >
                         {savingId === s.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clock className="h-4 w-4" />}
                       </Button>
