@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { 
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, NotebookPen, 
   Download, Loader2, CalendarDays, Target, Pencil, AlertTriangle,
-  ChevronRight, CheckCircle2, ChevronUp, ChevronDown, X, Minimize2, Maximize2
+  ChevronRight, CheckCircle2, ChevronUp, ChevronDown, X, Minimize2, Maximize2,
+  BookOpen, Laptop, Languages, Layers, User
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,6 +55,17 @@ type WeeklyTask = {
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+const COURSE_METRICS: Record<string, { label: string; color: string; icon: any }> = {
+  english: { label: "English", color: "text-blue-600 bg-blue-50 border-blue-200 dark:bg-blue-950/30 dark:border-blue-800", icon: BookOpen },
+  computer: { label: "Computer", color: "text-purple-600 bg-purple-50 border-purple-200 dark:bg-purple-950/30 dark:border-purple-800", icon: Laptop },
+  computer_english: { label: "Comp & English", color: "text-indigo-600 bg-indigo-50 border-indigo-200 dark:bg-indigo-950/30 dark:border-indigo-800", icon: Layers },
+  french: { label: "French", color: "text-rose-600 bg-rose-50 border-rose-200 dark:bg-rose-950/30 dark:border-rose-800", icon: Languages },
+  kiswahili: { label: "Kiswahili", color: "text-emerald-600 bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-800", icon: Languages },
+  german: { label: "German", color: "text-amber-600 bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800", icon: Languages },
+  private_class: { label: "Private Class", color: "text-cyan-600 bg-cyan-50 border-cyan-200 dark:bg-cyan-950/30 dark:border-cyan-800", icon: User },
+  private_class_2: { label: "Private Class 2", color: "text-pink-600 bg-pink-50 border-pink-200 dark:bg-pink-950/30 dark:border-pink-800", icon: User },
+};
+
 function startOfWeek(d = new Date()) {
   const x = new Date(d);
   const day = (x.getDay() + 6) % 7;
@@ -77,11 +89,12 @@ function AccountsPage() {
   const [outstandingFees, setOutstandingFees] = useState(0);
   const [owingStudents, setOwingStudents] = useState<StudentBalance[]>([]);
 
-  // Weekly Budget & Planner State
   const [budgets, setBudgets] = useState<WeeklyBudget[]>([]);
   const [tasks, setTasks] = useState<WeeklyTask[]>([]);
   const [selectedWeek, setSelectedWeek] = useState(getWeekLabel());
   const [loadingManagerData, setLoadingManagerData] = useState(true);
+
+  const [courseRevenue, setCourseRevenue] = useState<Record<string, number>>({});
 
   const currentWeekLabel = useMemo(() => getWeekLabel(), []);
 
@@ -151,11 +164,51 @@ function AccountsPage() {
     setLoadingManagerData(false);
   }, []);
 
+  // ✅ UPDATED: Bulletproof All-Time Revenue Fetch with Diagnostic Logging
+  const fetchCourseRevenue = useCallback(async () => {
+    // Fetch ALL payments from the beginning of time, no date filters
+    const { data, error } = await supabase
+      .from("payments")
+      .select("course, amount_paid, payment_date");
+      
+    if (error) {
+      console.error("Error fetching course revenue:", error);
+      return;
+    }
+
+    if (data) {
+      const revenue: Record<string, number> = {};
+      let uncategorizedTotal = 0;
+
+      data.forEach((p: any) => {
+        const amount = Number(p.amount_paid) || 0;
+        if (amount > 0) {
+          // Use the course if it exists, otherwise label it "Other/Uncategorized"
+          const courseKey = p.course ? p.course : "uncategorized";
+          revenue[courseKey] = (revenue[courseKey] || 0) + amount;
+          
+          if (!p.course) {
+            uncategorizedTotal += amount;
+          }
+        }
+      });
+
+      // This console log will let you verify exactly what the database is returning!
+      console.log("✅ ALL-TIME Revenue by Course:", revenue);
+      if (uncategorizedTotal > 0) {
+        console.warn(`⚠️ ${formatUGX(uncategorizedTotal)} in payments is missing a course assignment.`);
+      }
+
+      setCourseRevenue(revenue);
+    }
+  }, []);
+
   useEffect(() => { 
     fetchTransactions(); 
     fetchManagerBudget(); 
     fetchOutstandingFees();
-  }, [fetchTransactions, fetchManagerBudget, fetchOutstandingFees]);
+    fetchCourseRevenue(); 
+  }, [fetchTransactions, fetchManagerBudget, fetchOutstandingFees, fetchCourseRevenue]);
 
   const availableMonths = useMemo(() => {
     const months = new Set<string>();
@@ -290,7 +343,7 @@ function AccountsPage() {
 
   const handleDeleteFiltered = async () => {
     if (filteredTransactions.length === 0) { toast.info("No transactions match the current filters to delete."); return; }
-    if (!window.confirm(`️ WARNING: This will permanently delete ${filteredTransactions.length} transaction(s). Are you sure?`)) return;
+    if (!window.confirm(`⚠️ WARNING: This will permanently delete ${filteredTransactions.length} transaction(s). Are you sure?`)) return;
     const idsToDelete = filteredTransactions.map(t => t.id);
     const { error } = await supabase.from("transactions").delete().in("id", idsToDelete);
     if (error) { toast.error("Failed to delete transactions: " + error.message); } 
@@ -442,6 +495,41 @@ function AccountsPage() {
           <StatCard label="Total Expenses" value={globalTotals.expense} icon={TrendingDown} tone="rose" onClick={() => setStatDetailType("expense")} />
           <StatCard label="Net Profit" value={globalTotals.net} icon={Wallet} tone={globalTotals.net >= 0 ? "indigo" : "amber"} isNet />
           <StatCard label="Total Outstanding Fees" value={outstandingFees} icon={AlertTriangle} tone={outstandingFees > 0 ? "amber" : "emerald"} onClick={() => setStatDetailType("outstanding")} />
+        </div>
+      </div>
+
+      {/* ✅ UPDATED: Revenue by Course Snippet with "All-Time" Badge */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">All-Time Revenue by Course</h2>
+          <Badge variant="secondary" className="text-[10px]">Cumulative</Badge>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-8 gap-3">
+          {Object.entries(COURSE_METRICS).map(([key, metric]) => {
+            const Icon = metric.icon;
+            const revenue = courseRevenue[key] || 0;
+            return (
+              <Card key={key} className={`p-3 border transition-all hover:shadow-md hover:-translate-y-0.5 ${metric.color}`}>
+                <div className="flex items-start justify-between mb-2">
+                  <Icon className="h-4 w-4 opacity-80" />
+                  <span className="text-[10px] font-bold uppercase tracking-wider opacity-70">Collected</span>
+                </div>
+                <p className="text-xs font-medium opacity-90 mb-1 truncate">{metric.label}</p>
+                <p className="text-sm font-bold tracking-tight">{formatUGX(revenue)}</p>
+              </Card>
+            );
+          })}
+          {/* ✅ Show Uncategorized if old data is missing course labels */}
+          {courseRevenue["uncategorized"] > 0 && (
+            <Card className="p-3 border transition-all hover:shadow-md hover:-translate-y-0.5 text-gray-600 bg-gray-50 border-gray-200 dark:bg-gray-950/30 dark:border-gray-800">
+              <div className="flex items-start justify-between mb-2">
+                <AlertTriangle className="h-4 w-4 opacity-80" />
+                <span className="text-[10px] font-bold uppercase tracking-wider opacity-70">Collected</span>
+              </div>
+              <p className="text-xs font-medium opacity-90 mb-1 truncate">Other / Uncategorized</p>
+              <p className="text-sm font-bold tracking-tight">{formatUGX(courseRevenue["uncategorized"])}</p>
+            </Card>
+          )}
         </div>
       </div>
 
