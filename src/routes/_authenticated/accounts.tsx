@@ -164,12 +164,12 @@ function AccountsPage() {
     setLoadingManagerData(false);
   }, []);
 
-  // ✅ UPDATED: Bulletproof All-Time Revenue Fetch with Diagnostic Logging
+  // ✅ UPDATED: Fetch course revenue, but explicitly exclude "certificate" payments 
+  // so the course cards only show actual tuition/course revenue.
   const fetchCourseRevenue = useCallback(async () => {
-    // Fetch ALL payments from the beginning of time, no date filters
     const { data, error } = await supabase
       .from("payments")
-      .select("course, amount_paid, payment_date");
+      .select("course, amount_paid, payment_date, category");
       
     if (error) {
       console.error("Error fetching course revenue:", error);
@@ -179,11 +179,17 @@ function AccountsPage() {
     if (data) {
       const revenue: Record<string, number> = {};
       let uncategorizedTotal = 0;
+      let certificateTotal = 0;
 
       data.forEach((p: any) => {
         const amount = Number(p.amount_paid) || 0;
         if (amount > 0) {
-          // Use the course if it exists, otherwise label it "Other/Uncategorized"
+          // Skip certificate payments for the course revenue breakdown
+          if (p.category === "certificate") {
+            certificateTotal += amount;
+            return;
+          }
+          
           const courseKey = p.course ? p.course : "uncategorized";
           revenue[courseKey] = (revenue[courseKey] || 0) + amount;
           
@@ -193,10 +199,12 @@ function AccountsPage() {
         }
       });
 
-      // This console log will let you verify exactly what the database is returning!
-      console.log("✅ ALL-TIME Revenue by Course:", revenue);
+      console.log("✅ ALL-TIME Revenue by Course (Tuition Only):", revenue);
+      if (certificateTotal > 0) {
+        console.log(`💰 Total Certificate Revenue: ${formatUGX(certificateTotal)}`);
+      }
       if (uncategorizedTotal > 0) {
-        console.warn(`⚠️ ${formatUGX(uncategorizedTotal)} in payments is missing a course assignment.`);
+        console.warn(`⚠️ ${formatUGX(uncategorizedTotal)} in tuition payments is missing a course assignment.`);
       }
 
       setCourseRevenue(revenue);
@@ -498,11 +506,10 @@ function AccountsPage() {
         </div>
       </div>
 
-      {/* ✅ UPDATED: Revenue by Course Snippet with "All-Time" Badge */}
       <div>
         <div className="flex items-center gap-2 mb-3">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">All-Time Revenue by Course</h2>
-          <Badge variant="secondary" className="text-[10px]">Cumulative</Badge>
+          <Badge variant="secondary" className="text-[10px]">Cumulative (Tuition Only)</Badge>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-8 gap-3">
           {Object.entries(COURSE_METRICS).map(([key, metric]) => {
@@ -519,7 +526,6 @@ function AccountsPage() {
               </Card>
             );
           })}
-          {/* ✅ Show Uncategorized if old data is missing course labels */}
           {courseRevenue["uncategorized"] > 0 && (
             <Card className="p-3 border transition-all hover:shadow-md hover:-translate-y-0.5 text-gray-600 bg-gray-50 border-gray-200 dark:bg-gray-950/30 dark:border-gray-800">
               <div className="flex items-start justify-between mb-2">

@@ -86,6 +86,7 @@ type PaymentRecord = {
   months_covered?: number;
   status: string;
   note?: string;
+  category?: "tuition" | "certificate";
 };
 
 const statusVariant = (s: Status): "secondary" | "default" | "outline" =>
@@ -781,6 +782,9 @@ function StudentsPage() {
 
                       const startStr = startDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
                       const endStr = endDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                      
+                      // ✅ NEW: Visual indicator for certificate payments
+                      const isCertificate = p.category === "certificate";
 
                       return (
                         <div key={p.id} className="flex items-center justify-between text-xs border-b pb-2 gap-2">
@@ -788,11 +792,14 @@ function StudentsPage() {
                             <span className="font-medium text-primary">{startStr} — {endStr}</span>
                             <span className="text-muted-foreground text-[10px] mt-0.5">
                               {p.method} · {monthsCovered} mo{monthsCovered > 1 ? "s" : ""} covered
+                              {isCertificate ? " · 🎓 Certificate Fee" : ""}
                               {p.note?.toLowerCase().includes("backfilled") ? " · historical" : ""}
                             </span>
                           </div>
                           <span className="font-medium text-green-600 shrink-0">{formatUGX(p.amount_paid)}</span>
-                          <Badge variant={p.status === "paid" ? "default" : p.status === "partial" ? "outline" : "destructive"} className="text-[10px] shrink-0">{p.status}</Badge>
+                          <Badge variant={isCertificate ? "secondary" : (p.status === "paid" ? "default" : p.status === "partial" ? "outline" : "destructive")} className="text-[10px] shrink-0">
+                            {isCertificate ? "Certificate" : p.status}
+                          </Badge>
                         </div>
                       );
                     })}
@@ -867,11 +874,12 @@ function EditDialog({ student, onClose, onSave, onPaymentRecorded }: { student: 
       }).select().single();
       if (txErr) throw txErr;
 
+      // ✅ NEW: Explicitly added category: "tuition" to historical payments
       const { error: payErr } = await supabase.from("payments").insert({
         student_id: draft.id, student_name: draft.name, reg_no: draft.reg_no, course: draft.course, level: draft.level,
         amount_due: amountPaid, amount_paid: amountPaid, balance: newBalance, method: "cash", payment_date: histDate,
         month_year: monthYear, months_covered: histMonths, status: newBalance === 0 ? "paid" : "partial",
-        note: histNote || "Recorded via Student Edit (Historical)", transaction_id: txData.id
+        note: histNote || "Recorded via Student Edit (Historical)", transaction_id: txData.id, category: "tuition"
       });
       if (payErr) throw payErr;
 
