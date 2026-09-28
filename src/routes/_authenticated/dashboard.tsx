@@ -4,7 +4,7 @@ import {
   Users, UserCheck, GraduationCap, DollarSign,
   CreditCard, TrendingUp, AlertTriangle, BookOpen,
   ArrowUp, ArrowDown, Loader2, CalendarDays, ChevronRight,
-  Pencil, Trash2, KeyRound, CheckCircle2
+  Pencil, Trash2, KeyRound, CheckCircle2, Sparkles
 } from "lucide-react";
 import {
   PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -14,6 +14,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { formatUGX } from "@/lib/courses";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
@@ -50,6 +51,10 @@ function Dashboard() {
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
 
+  // Live pulse metrics for the Hero Banner
+  const [todayIncome, setTodayIncome] = useState(0);
+  const [overdueCount, setOverdueCount] = useState(0);
+
   const COLORS = [
     "#3b82f6", "#10b981", "#f59e0b", "#ef4444",
     "#8b5cf6", "#ec4899", "#06b6d4", "#f97316",
@@ -64,10 +69,10 @@ function Dashboard() {
       const totalStudents = students?.length ?? 0;
       const activeStudents = students?.filter(s => s.status === "active" || s.status === "promoted").length ?? 0;
       const graduated = students?.filter(s => s.status === "graduated").length ?? 0;
+      const owingStudents = students?.filter(s => (s.balance || 0) > 0 && (s.status === "active" || s.status === "promoted")) ?? [];
       
-      const feeBalances = students
-        ?.filter(s => s.status === "active" || s.status === "promoted")
-        .reduce((sum, s) => sum + (Number(s.balance) || 0), 0) ?? 0;
+      const feeBalances = owingStudents.reduce((sum, s) => sum + (Number(s.balance) || 0), 0) ?? 0;
+      setOverdueCount(owingStudents.length);
         
       const activeCourses = new Set(
         students?.filter(s => s.status === "active" || s.status === "promoted").map(s => s.course)
@@ -92,8 +97,10 @@ function Dashboard() {
       let lastMonthIncome = 0;
       let thisMonthExpenses = 0;
       let lastMonthExpenses = 0;
+      let todayTotalIncome = 0;
 
       const now = new Date();
+      const todayStr = now.toISOString().split("T")[0];
       const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
       const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
@@ -123,6 +130,7 @@ function Dashboard() {
         
         if (t.type === "income") {
           totalIncome += amt;
+          if (t.date === todayStr) todayTotalIncome += amt;
           if (tDate >= thisMonthStart) thisMonthIncome += amt;
           else if (tDate >= lastMonthStart && tDate <= lastMonthEnd) lastMonthIncome += amt;
         } else if (t.type === "expense") {
@@ -131,6 +139,8 @@ function Dashboard() {
           else if (tDate >= lastMonthStart && tDate <= lastMonthEnd) lastMonthExpenses += amt;
         }
       });
+
+      setTodayIncome(todayTotalIncome);
 
       const netProfit = totalIncome - totalExpenses;
 
@@ -147,7 +157,6 @@ function Dashboard() {
       const incomeTrend = calcTrend(thisMonthIncome, lastMonthIncome);
       const expenseTrend = calcTrend(thisMonthExpenses, lastMonthExpenses);
 
-      const todayStr = now.toISOString().split("T")[0];
       const { data: eventsData } = await supabase
         .from("events")
         .select("*")
@@ -188,26 +197,17 @@ function Dashboard() {
 
     const { error } = await supabase
       .from("events")
-      .update({
-        title: editTitle.trim(),
-        description: editDescription.trim() || null,
-      })
+      .update({ title: editTitle.trim(), description: editDescription.trim() || null })
       .eq("id", eventId);
 
-    if (error) {
-      toast.error("Failed to update event");
-      return;
-    }
+    if (error) { toast.error("Failed to update event"); return; }
 
     toast.success("Event updated successfully");
     setEditingEvent(null);
     
     const { data: eventsData } = await supabase
-      .from("events")
-      .select("*")
-      .gte("event_date", new Date().toISOString().split("T")[0])
-      .order("event_date", { ascending: true })
-      .limit(3);
+      .from("events").select("*").gte("event_date", new Date().toISOString().split("T")[0])
+      .order("event_date", { ascending: true }).limit(3);
     setEvents(eventsData || []);
   };
 
@@ -219,25 +219,13 @@ function Dashboard() {
 
   const handleDeleteEvent = async (eventId: string) => {
     if (!confirm("Are you sure you want to delete this event?")) return;
-
-    const { error } = await supabase
-      .from("events")
-      .delete()
-      .eq("id", eventId);
-
-    if (error) {
-      toast.error("Failed to delete event");
-      return;
-    }
+    const { error } = await supabase.from("events").delete().eq("id", eventId);
+    if (error) { toast.error("Failed to delete event"); return; }
 
     toast.success("Event deleted successfully");
-    
     const { data: eventsData } = await supabase
-      .from("events")
-      .select("*")
-      .gte("event_date", new Date().toISOString().split("T")[0])
-      .order("event_date", { ascending: true })
-      .limit(3);
+      .from("events").select("*").gte("event_date", new Date().toISOString().split("T")[0])
+      .order("event_date", { ascending: true }).limit(3);
     setEvents(eventsData || []);
   };
 
@@ -272,21 +260,65 @@ function Dashboard() {
   };
 
   return (
-    <div className="space-y-8">
-      {/* ✅ OPTION 1: CLEAN & MODERN HEADER */}
-      <header className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-2 border-b border-border/50">
-        <div>
-          <p className="text-sm font-medium text-muted-foreground mb-1">
-            {new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening"}
-          </p>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Dashboard Overview</h1>
-          <p className="text-muted-foreground mt-1">Here is what is happening at Sandstone School today.</p>
+    <div className="space-y-8 pb-8">
+      {/* ✅ REFINED: High-contrast Hero Banner with Date and Frosted Glass Containers */}
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-slate-900 dark:to-blue-950/50 border border-blue-200 dark:border-blue-800 p-6 sm:p-8 shadow-sm">
+        {/* Subtle decorative blurs that adapt to light/dark */}
+        <div className="absolute top-0 right-0 -mt-16 -mr-16 h-64 w-64 rounded-full bg-blue-400/10 dark:bg-blue-500/10 blur-3xl pointer-events-none" />
+        <div className="absolute bottom-0 left-0 -mb-16 -ml-16 h-48 w-48 rounded-full bg-indigo-400/10 dark:bg-indigo-500/10 blur-3xl pointer-events-none" />
+        
+        <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-6">
+          <div className="space-y-2">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-100 dark:bg-blue-900/50 border border-blue-200 dark:border-blue-800 text-xs font-semibold text-blue-700 dark:text-blue-300">
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>Sandstone School Management</span>
+            </div>
+            <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 dark:text-white">
+              {new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening"}
+            </h1>
+            
+            {/* ✅ NEW: Added Current Date */}
+            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
+              {new Date().toLocaleDateString('en-UG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+            </p>
+
+            <p className="text-slate-600 dark:text-slate-300 text-sm sm:text-base max-w-xl">
+              Here is a quick summary of what is happening at the school today.
+            </p>
+          </div>
+          
+          {/* ✅ CLICKABLE Live Pulse Metrics with increased blur for seamless blending */}
+          <div className="flex flex-wrap gap-4">
+            <div 
+              onClick={() => navigate({ to: "/accounts" })}
+              className="cursor-pointer bg-white/30 dark:bg-slate-900/30 hover:bg-white/50 dark:hover:bg-slate-900/50 backdrop-blur-2xl rounded-2xl p-4 border border-white/40 dark:border-white/10 min-w-[160px] transition-all hover:shadow-md hover:-translate-y-0.5 group"
+            >
+              <p className="text-slate-500 dark:text-slate-400 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                <DollarSign className="h-3.5 w-3.5" /> Today's Collections
+              </p>
+              <p className="text-2xl font-bold mt-1.5 text-slate-900 dark:text-white">{formatUGX(todayIncome)}</p>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1">
+                View details <ChevronRight className="h-3 w-3" />
+              </p>
+            </div>
+            
+            <div 
+              onClick={() => navigate({ to: "/payments" })}
+              className="cursor-pointer bg-white/30 dark:bg-slate-900/30 hover:bg-white/50 dark:hover:bg-slate-900/50 backdrop-blur-2xl rounded-2xl p-4 border border-white/40 dark:border-white/10 min-w-[160px] transition-all hover:shadow-md hover:-translate-y-0.5 group"
+            >
+              <p className="text-slate-500 dark:text-slate-400 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5 group-hover:text-destructive transition-colors">
+                <AlertTriangle className="h-3.5 w-3.5" /> Overdue Fees
+              </p>
+              <p className="text-2xl font-bold mt-1.5 text-slate-900 dark:text-white">
+                {overdueCount} <span className="text-sm font-normal text-slate-500 dark:text-slate-400">students</span>
+              </p>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1">
+                View debtors <ChevronRight className="h-3 w-3" />
+              </p>
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full border">
-          <CalendarDays className="h-4 w-4" />
-          <span>{new Date().toLocaleDateString('en-UG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
-        </div>
-      </header>
+      </div>
 
       {/* Stats Grid */}
       <div className="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
@@ -308,225 +340,139 @@ function Dashboard() {
       {/* ✅ SECURE: Password Reset Requests Widget */}
       <PasswordResetRequestsWidget />
 
-      {/* Upcoming Events & Reminders Widget */}
-      <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-accent">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-bold text-lg flex items-center gap-2">
-            <CalendarDays className="h-5 w-5 text-primary" /> Upcoming Events & Reminders
-          </h3>
-          <button onClick={() => navigate({ to: "/calendar" })} className="text-xs text-primary hover:underline flex items-center gap-1 font-medium">
+      {/* SEPARATED LAYOUT: Each major category gets its own dedicated, spacious section */}
+      
+      {/* 1. Financial Performance Chart */}
+      <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-lg">
+        <div className="mb-6">
+          <h2 className="font-bold text-xl flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-primary" /> Financial Performance
+          </h2>
+          <p className="text-sm text-muted-foreground mt-1">Income vs expenses over the last 6 months</p>
+        </div>
+        <div className="h-80">
+          {loading ? (
+            <div className="h-full flex items-center justify-center text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin" />
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={monthlyRevenue} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorIncome" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="colorExpenses" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted/50" vertical={false} />
+                <XAxis dataKey="name" className="text-xs" tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} dy={10} />
+                <YAxis className="text-xs" tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} tickFormatter={(value) => `${(value / 1000000).toFixed(1)}M`} dx={-10} />
+                <Tooltip content={<CustomBarTooltip />} />
+                <Legend wrapperStyle={{ paddingTop: '20px' }} iconType="round" iconSize={10} />
+                <Area type="monotone" dataKey="Income" stroke="#10b981" strokeWidth={3} fillOpacity={1} fill="url(#colorIncome)" name="Income" />
+                <Area type="monotone" dataKey="Expenses" stroke="#ef4444" strokeWidth={3} fillOpacity={1} fill="url(#colorExpenses)" name="Expenses" />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
+      {/* 2. Student Enrollment Distribution Chart */}
+      <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-lg">
+        <div className="mb-6">
+          <h2 className="font-bold text-xl flex items-center gap-2">
+            <Users className="h-5 w-5 text-primary" /> Student Enrollment Distribution
+          </h2>
+          <p className="text-sm text-muted-foreground mt-1">Active students by programme</p>
+        </div>
+        <div className="h-80">
+          {loading ? (
+            <div className="h-full flex items-center justify-center text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin" />
+            </div>
+          ) : courseDistribution.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-muted-foreground text-sm bg-muted/30 rounded-xl">
+              No active students to display
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={courseDistribution} cx="50%" cy="50%" labelLine={false} outerRadius={110} innerRadius={60} fill="#8884d8" dataKey="value" paddingAngle={3}>
+                  {courseDistribution.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="hsl(var(--card))" strokeWidth={2} />
+                  ))}
+                </Pie>
+                <Tooltip content={<CustomPieTooltip />} />
+                <Legend layout="vertical" align="right" verticalAlign="middle" wrapperStyle={{ paddingLeft: '20px' }} iconType="circle" iconSize={10} />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
+      {/* 3. Upcoming Events & Reminders (Completely separated from charts) */}
+      <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-lg">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h3 className="font-bold text-xl flex items-center gap-2">
+              <CalendarDays className="h-5 w-5 text-primary" /> Upcoming Events & Reminders
+            </h3>
+            <p className="text-sm text-muted-foreground mt-1">Important dates and school holidays</p>
+          </div>
+          <button onClick={() => navigate({ to: "/calendar" })} className="text-xs text-primary hover:underline flex items-center gap-1 font-medium bg-primary/5 px-3 py-1.5 rounded-lg hover:bg-primary/10 transition-colors">
             View Full Calendar <ChevronRight className="h-3 w-3" />
           </button>
         </div>
+        
         <div className="space-y-3">
           {loading ? (
-            <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+            <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
           ) : events.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">No upcoming events scheduled.</p>
+            <p className="text-sm text-muted-foreground py-8 text-center bg-muted/30 rounded-xl">No upcoming events scheduled.</p>
           ) : (
             events.map((ev) => (
-              <div key={ev.id} className="flex items-start gap-3 p-3 rounded-lg bg-background border border-border/50 shadow-sm">
-                <div className={`h-10 w-10 rounded-lg flex flex-col items-center justify-center shrink-0 ${ev.is_holiday ? "bg-red-100 text-red-600 dark:bg-red-900/30" : "bg-blue-100 text-blue-600 dark:bg-blue-900/30"}`}>
+              <div key={ev.id} className="flex items-start gap-4 p-4 rounded-xl bg-background border border-border/50 shadow-sm hover:border-primary/30 transition-colors">
+                <div className={`h-12 w-12 rounded-xl flex flex-col items-center justify-center shrink-0 ${ev.is_holiday ? "bg-red-100 text-red-600 dark:bg-red-900/30" : "bg-blue-100 text-blue-600 dark:bg-blue-900/30"}`}>
                   <span className="text-[10px] font-bold uppercase leading-none">
                     {new Date(ev.event_date).toLocaleString('default', { month: 'short' })}
                   </span>
-                  <span className="text-lg font-bold leading-none mt-0.5">
+                  <span className="text-xl font-bold leading-none mt-0.5">
                     {new Date(ev.event_date).getDate()}
                   </span>
                 </div>
                 <div className="flex-1 min-w-0">
                   {editingEvent === ev.id ? (
                     <div className="space-y-2">
-                      <input
-                        type="text"
-                        value={editTitle}
-                        onChange={(e) => setEditTitle(e.target.value)}
-                        className="w-full text-sm font-semibold px-2 py-1 border rounded"
-                        placeholder="Event title"
-                        autoFocus
-                      />
-                      <textarea
-                        value={editDescription}
-                        onChange={(e) => setEditDescription(e.target.value)}
-                        className="w-full text-xs px-2 py-1 border rounded"
-                        rows={2}
-                        placeholder="Description (optional)"
-                      />
+                      <input type="text" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} className="w-full text-sm font-semibold px-2 py-1.5 border rounded-lg" placeholder="Event title" autoFocus />
+                      <textarea value={editDescription} onChange={(e) => setEditDescription(e.target.value)} className="w-full text-xs px-2 py-1.5 border rounded-lg" rows={2} placeholder="Description" />
                       <div className="flex gap-2">
-                        <Button size="sm" onClick={() => handleSaveEdit(ev.id)} className="h-6 text-xs">
-                          Save
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={handleCancelEdit} className="h-6 text-xs">
-                          Cancel
-                        </Button>
+                        <Button size="sm" onClick={() => handleSaveEdit(ev.id)}>Save</Button>
+                        <Button size="sm" variant="outline" onClick={handleCancelEdit}>Cancel</Button>
                       </div>
                     </div>
                   ) : (
                     <>
                       <div className="flex items-center gap-2">
-                        <p className="font-semibold text-sm truncate">{ev.title}</p>
-                        {ev.is_holiday && <span className="bg-destructive/10 text-destructive text-[10px] px-1.5 py-0.5 rounded-full font-bold">Holiday</span>}
+                        <p className="font-semibold text-base">{ev.title}</p>
+                        {ev.is_holiday && <Badge variant="destructive" className="text-[10px] px-1.5 py-0">Holiday</Badge>}
                       </div>
-                      <p className="text-xs text-muted-foreground truncate mt-0.5">{ev.description || "No description provided."}</p>
+                      <p className="text-sm text-muted-foreground mt-1">{ev.description || "No description provided."}</p>
                     </>
                   )}
                 </div>
                 {editingEvent !== ev.id && (
-                  <div className="flex gap-1">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 text-muted-foreground hover:text-primary"
-                      onClick={() => handleEditClick(ev)}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                      onClick={() => handleDeleteEvent(ev.id)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                  <div className="flex flex-col gap-1">
+                    <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => handleEditClick(ev)}><Pencil className="h-4 w-4" /></Button>
+                    <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => handleDeleteEvent(ev.id)}><Trash2 className="h-4 w-4" /></Button>
                   </div>
                 )}
               </div>
             ))
           )}
-        </div>
-      </div>
-
-      {/* Live Charts */}
-      <div className="grid gap-5 lg:grid-cols-2">
-        {/* Revenue Overview */}
-        <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-accent">
-          <div className="mb-6">
-            <h2 className="font-bold text-xl flex items-center gap-2">
-              <TrendingUp className="h-5 w-5 text-primary" />
-              Financial Performance
-            </h2>
-            <p className="text-sm text-muted-foreground mt-1">Income vs expenses over the last 6 months</p>
-          </div>
-          <div className="h-80">
-            {loading ? (
-              <div className="h-full flex items-center justify-center text-muted-foreground">
-                <Loader2 className="h-6 w-6 animate-spin" />
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={monthlyRevenue} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="colorIncome" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                    </linearGradient>
-                    <linearGradient id="colorExpenses" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted/50" vertical={false} />
-                  <XAxis 
-                    dataKey="name" 
-                    className="text-xs" 
-                    tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }}
-                    axisLine={false}
-                    tickLine={false}
-                    dy={10}
-                  />
-                  <YAxis 
-                    className="text-xs" 
-                    tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(value) => `${(value / 1000000).toFixed(1)}M`}
-                    dx={-10}
-                  />
-                  <Tooltip content={<CustomBarTooltip />} />
-                  <Legend 
-                    wrapperStyle={{ paddingTop: '20px' }}
-                    iconType="round"
-                    iconSize={10}
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="Income" 
-                    stroke="#10b981" 
-                    strokeWidth={3}
-                    fillOpacity={1} 
-                    fill="url(#colorIncome)" 
-                    name="Income"
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="Expenses" 
-                    stroke="#ef4444" 
-                    strokeWidth={3}
-                    fillOpacity={1} 
-                    fill="url(#colorExpenses)" 
-                    name="Expenses"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-
-        {/* Course Distribution */}
-        <div className="rounded-2xl bg-card border p-6 transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-accent">
-          <div className="mb-6">
-            <h2 className="font-bold text-xl flex items-center gap-2">
-              <Users className="h-5 w-5 text-primary" />
-              Student Enrollment Distribution
-            </h2>
-            <p className="text-sm text-muted-foreground mt-1">Active students by programme</p>
-          </div>
-          <div className="h-80">
-            {loading ? (
-              <div className="h-full flex items-center justify-center text-muted-foreground">
-                <Loader2 className="h-6 w-6 animate-spin" />
-              </div>
-            ) : courseDistribution.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
-                No active students to display
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={courseDistribution}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    outerRadius={110}
-                    innerRadius={60}
-                    fill="#8884d8"
-                    dataKey="value"
-                    paddingAngle={3}
-                  >
-                    {courseDistribution.map((entry, index) => (
-                      <Cell 
-                        key={`cell-${index}`} 
-                        fill={COLORS[index % COLORS.length]}
-                        stroke="hsl(var(--card))"
-                        strokeWidth={2}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip content={<CustomPieTooltip />} />
-                  <Legend 
-                    layout="vertical" 
-                    align="right" 
-                    verticalAlign="middle"
-                    wrapperStyle={{ paddingLeft: '20px' }}
-                    iconType="circle"
-                    iconSize={10}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            )}
-          </div>
         </div>
       </div>
     </div>
@@ -582,56 +528,36 @@ function PasswordResetRequestsWidget() {
   useEffect(() => {
     const checkAdminAndFetch = async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      
       const isAdmin = user?.email?.includes("ankotrip1@gmail.com") || user?.user_metadata?.username === "ankotrip1@gmail.com";
       setIsSuperAdmin(!!isAdmin);
 
       if (isAdmin) {
-        const { data } = await supabase
-          .from("password_reset_requests")
-          .select("*")
-          .eq("status", "pending")
-          .order("requested_at", { ascending: false });
-        
+        const { data } = await supabase.from("password_reset_requests").select("*").eq("status", "pending").order("requested_at", { ascending: false });
         if (data) setRequests(data);
       }
       setLoading(false);
     };
-    
     checkAdminAndFetch();
   }, []);
 
   const markAsResolved = async (id: string) => {
-    const { error } = await supabase
-      .from("password_reset_requests")
-      .update({ status: "resolved" })
-      .eq("id", id);
-      
+    const { error } = await supabase.from("password_reset_requests").update({ status: "resolved" }).eq("id", id);
     if (!error) {
       toast.success("Marked as resolved");
-      const { data } = await supabase
-        .from("password_reset_requests")
-        .select("*")
-        .eq("status", "pending")
-        .order("requested_at", { ascending: false });
+      const { data } = await supabase.from("password_reset_requests").select("*").eq("status", "pending").order("requested_at", { ascending: false });
       if (data) setRequests(data);
     }
   };
 
   if (!isSuperAdmin) return null;
-  if (loading) return (
-    <div className="flex items-center gap-2 text-sm text-muted-foreground p-4">
-      <Loader2 className="h-4 w-4 animate-spin" /> Loading admin requests...
-    </div>
-  );
+  if (loading) return <div className="flex items-center gap-2 text-sm text-muted-foreground p-4"><Loader2 className="h-4 w-4 animate-spin" /> Loading admin requests...</div>;
   if (requests.length === 0) return null;
 
   return (
     <Card className="border-amber-200 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-800">
       <CardHeader className="pb-3">
         <CardTitle className="text-sm font-semibold flex items-center gap-2 text-amber-700 dark:text-amber-400">
-          <KeyRound className="h-4 w-4" />
-          Pending Password Reset Requests ({requests.length})
+          <KeyRound className="h-4 w-4" /> Pending Password Reset Requests ({requests.length})
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -639,21 +565,10 @@ function PasswordResetRequestsWidget() {
           <div key={req.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-white dark:bg-card border border-amber-200 dark:border-amber-800 gap-3">
             <div className="flex-1">
               <p className="font-semibold text-sm">{req.username}</p>
-              <p className="text-xs text-muted-foreground">
-                Requested: {new Date(req.requested_at).toLocaleString()}
-              </p>
-              {req.message && (
-                <p className="text-xs text-muted-foreground mt-1 italic">
-                  "{req.message}"
-                </p>
-              )}
+              <p className="text-xs text-muted-foreground">Requested: {new Date(req.requested_at).toLocaleString()}</p>
+              {req.message && <p className="text-xs text-muted-foreground mt-1 italic">"{req.message}"</p>}
             </div>
-            <Button 
-              size="sm" 
-              variant="outline" 
-              className="h-8 text-xs border-amber-300 text-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900 shrink-0"
-              onClick={() => markAsResolved(req.id)}
-            >
+            <Button size="sm" variant="outline" className="h-8 text-xs border-amber-300 text-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900 shrink-0" onClick={() => markAsResolved(req.id)}>
               <CheckCircle2 className="h-3 w-3 mr-1" /> Mark Resolved
             </Button>
           </div>
