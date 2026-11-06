@@ -50,7 +50,7 @@
   --card-foreground: oklch(0.15 0.02 260);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.15 0.02 260);
-  --primary: oklch(0.34 0.13 277);            /* deep indigo #312e81 ~ */
+  --primary: oklch(0.34 0.13 277);
   --primary-foreground: oklch(0.99 0.005 250);
   --secondary: oklch(0.96 0.01 250);
   --secondary-foreground: oklch(0.25 0.05 270);
@@ -70,7 +70,7 @@
   --input: oklch(0.92 0.01 260);
   --ring: oklch(0.34 0.13 277);
 
-  --sidebar: oklch(0.28 0.10 277);             /* dark indigo navy */
+  --sidebar: oklch(0.28 0.10 277);
   --sidebar-foreground: oklch(0.96 0.01 250);
   --sidebar-active: oklch(0.40 0.16 277);
   --sidebar-muted: oklch(0.72 0.05 270);
@@ -168,4 +168,39 @@
 @keyframes stat-card-gradient-shift {
   0%, 100% { background-position: 0% 50%; }
   50% { background-position: 100% 50%; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CUSTOM ANIMATIONS FOR LOGIN PAGE
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Floating icons animation (slow drift) */
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-20px) rotate(5deg); }
+}
+
+/* Floating icons animation (medium drift) */
+@keyframes float-medium {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-15px) rotate(-3deg); }
+}
+
+/* Gentle bounce for the emoji */
+@keyframes bounce-slow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+/* Utility classes using Tailwind v4 @utility syntax */
+@utility animate-float-slow {
+  animation: float-slow 6s ease-in-out infinite;
+}
+
+@utility animate-float-medium {
+  animation: float-medium 5s ease-in-out infinite;
+}
+
+@utility animate-bounce-slow {
+  animation: bounce-slow 2s ease-in-out infinite;
 }
